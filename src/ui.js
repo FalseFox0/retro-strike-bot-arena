@@ -10,6 +10,7 @@ import { WEAPONS, CATEGORIES, canUse } from './weapons.js';
 import { MAP_LIST, isBombMap } from './map.js';
 import { CROSSHAIR_DEFAULTS, CROSSHAIR_SHAPES, CROSSHAIR_SWATCHES, crosshairScale, crosshairGap, drawCrosshair } from './crosshair.js';
 import { HACKS, SEE_HACKS, PLAY_HACKS } from './hacks.js';
+import { testRelay } from './net.js';
 
 const DIGITS = {
   Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5, Digit6: 6, Digit7: 7, Digit8: 8, Digit9: 9, Digit0: 0,
@@ -468,11 +469,36 @@ export class UI {
           onchange: (e) => { settings.playerName = e.target.value.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 20); save(); },
         })),
         this.check(t('tracers'), settings.tracers, (v) => { settings.tracers = v; save(); }),
-        this.check(t('pauseInMenu'), settings.pauseInMenu, (v) => { settings.pauseInMenu = v; save(); }));
+        this.check(t('pauseInMenu'), settings.pauseInMenu, (v) => { settings.pauseInMenu = v; save(); }),
+        this.relayOptions(save));
     }
     return this.win(t('options'), h('div', {}, tabBar, h('div', { class: 'vgui-tabbody' }, content)), [
       this.btn(t('ok'), () => this.closeDialog(), true),
     ], 'w-options');
+  }
+
+  // the relay for online games you host (Options -> Game), with a test button
+  relayOptions(save) {
+    const r = settings.relay;
+    const field = (k, placeholder, type = 'text') => h('input', {
+      class: 'vgui-input opt-relay', type, value: r[k], placeholder, spellcheck: false, autocomplete: type === 'password' ? 'new-password' : 'off',
+      oninput: (e) => { r[k] = e.target.value.trim().slice(0, 200); save(); },
+    });
+    const result = h('span', { class: 'opt-relayres' });
+    const test = async () => {
+      result.className = 'opt-relayres';
+      result.textContent = t('onlRelayTesting');
+      const res = await testRelay(r);
+      result.classList.toggle('bad', !res.ok);
+      result.textContent = res.ok ? t('onlRelayOk', { n: res.ms }) : t('onlRelayErr_' + res.error);
+    };
+    return h('div', { class: 'opt-relaybox' },
+      h('div', { class: 'ar-head' }, t('onlRelay')),
+      this.row(t('onlRelayServer'), field('server', 'relay1.expressturn.com:3478')),
+      this.row(t('onlRelayUser'), field('user', '')),
+      this.row(t('onlRelayPass'), field('pass', '', 'password')),
+      h('div', { class: 'vgui-desc' }, t('onlRelayDesc')),
+      h('div', { class: 'opt-relaytest' }, this.btn(t('onlRelayTest'), test), result));
   }
 
   // custom crosshair: shape, color, opacity, sizes, dynamic, dot, outline

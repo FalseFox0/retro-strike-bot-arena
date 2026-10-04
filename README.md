@@ -20,17 +20,19 @@ Keep its window open while you play: Bot Arena's background threads load the gam
 
 ## Play with friends
 
-Up to 10 players (5 v 5) in every mode and on every map, with bots in the places nobody plays. There's no account and no game server: the host's browser runs the match, and the friends' browsers connect straight to it (WebRTC, encrypted). Connecting takes one copy-paste each way:
+Up to 10 players (5 v 5) in every mode and on every map, with bots in the places nobody plays. There's no account and no game server: the host's browser runs the match, and the friends' browsers connect straight to it (WebRTC, encrypted). Connecting takes one link each way:
 
 1. The host: **Play online → Host**, then **Make an invite link**, and sends it to one friend (each friend needs a link of their own).
-2. The friend opens the link. The game shows them a **reply code**, which they send back.
-3. The host pastes the reply code, and the friend is in the lobby.
+2. The friend opens the link. The game shows them a short **reply link**, which they send back.
+3. The host clicks the reply link (in the browser where the game is open), and the friend is in the lobby. Pasting it into the lobby works too.
 4. Everyone picks a team; the host picks the match settings and presses **Start match**.
 
 Friends can join a running match from the lobby, and a friend's **Esc → Back to the lobby** leaves the match without disconnecting. The host's **Esc → End the match** sends everyone back to the lobby; after a match everyone goes back by themselves after 20 s (the host can go sooner). Keep the host's page open: closing it ends the game for everyone.
-Your own movement doesn't wait for the host, and shots are checked against what the shooter saw (lag compensation). Some networks (often universities, offices or mobile data) block direct connections; the game then says it couldn't connect, and another network may work.
+Your own movement doesn't wait for the host, and shots are checked against what the shooter saw (lag compensation).
 
-> **TR:** Arkadaşlarla oyna: **Çevrimiçi oyna → Kur**, **Davet bağlantısı oluştur**, bağlantıyı bir arkadaşına gönder; o bağlantıyı açınca çıkan **yanıt kodunu** sana geri gönderir, sen yapıştırırsın. Herkes lobideyken **Maçı başlat**.
+**Universities, offices and mobile data** often block direct connections between players. For those, the host can add a free **relay** (a TURN server, for example a free account at expressturn.com) in **Options → Game**: copy its server, username and password there and press **Test the relay**. The host's invite links pass it on to the friends, and it's only used when a direct connection doesn't work. The relay only passes the game data along; it can't read it.
+
+> **TR:** Arkadaşlarla oyna: **Çevrimiçi oyna → Kur**, **Davet bağlantısı oluştur**, bağlantıyı bir arkadaşına gönder; o bağlantıyı açınca çıkan kısa **yanıt bağlantısını** sana geri gönderir, sen ona tıklarsın. Herkes lobideyken **Maçı başlat**. Üniversite veya mobil veri bağlantıyı engelliyorsa kurucu **Seçenekler → Oyun** kısmına ücretsiz bir **aktarıcı** (TURN sunucusu, ör. expressturn.com) ekleyebilir.
 
 ## What's in it
 

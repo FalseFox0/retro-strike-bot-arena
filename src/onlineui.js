@@ -5,8 +5,13 @@
 import { t } from './i18n.js';
 import { h } from './ui.js';
 import { settings, saveSettings, hasTeams } from './settings.js';
-import { HostSession, ClientSession, MAX_PLAYERS, MAX_TEAM, codeFrom } from './online.js';
-import { decodeCode } from './net.js';
+import { HostSession, ClientSession, MAX_PLAYERS, MAX_TEAM, codeFrom, replyUrl } from './online.js';
+import { readInvite, relayServers } from './net.js';
+
+// reply links clicked in another tab of this browser arrive on this channel
+// (replylink.js sends them)
+const CHANNEL = 'retro-strike-online';
+const SLOW_HOST_MS = 45000;   // friend: when to explain what a long wait may mean
 
 const TEAM_LABEL = { auto: 'autoSelect', T: 'teamT', CT: 'teamCT', spec: 'spectate' };
 
@@ -27,6 +32,12 @@ export class OnlineScreens {
     this.myReply = null;     // the friend's own reply code
     this.listEl = null;
     this.copied = '';
+    try {
+      this.channel = new BroadcastChannel(CHANNEL);
+      this.channel.onmessage = (e) => this.replyFromTab(e.data);
+    } catch {
+      this.channel = null;   // (pasting the reply still works)
+    }
   }
 
   isOpen() {
@@ -65,7 +76,7 @@ export class OnlineScreens {
   // ---------------------------------------------------------------- sessions
 
   host() {
-    const s = new HostSession(settings.playerName, settings.onlineMatch);
+    const s = new HostSession(settings.playerName, settings.onlineMatch, settings.relay);
     this.watch(s);
     this.session = s;
     this.view = 'lobby';
@@ -79,7 +90,7 @@ export class OnlineScreens {
     let code;
     try {
       code = codeFrom(this.joinText);
-      decodeCode(code, 'invite');
+      readInvite(code);
     } catch (e) {
       this.say(e.message === 'version' ? 'onlEnded_version' : 'onlBadInvite', true);
       return;
@@ -92,13 +103,15 @@ export class OnlineScreens {
     this.view = 'join';
     this.redraw();
     try {
-      this.myReply = await s.answer(code);
+      this.myReply = replyUrl(await s.answer(code));
     } catch {
       this.session = null;
       s.close();
       this.say('onlBadInvite', true);
       return;
     }
+    // a long wait gets a word on what it may mean
+    setTimeout(() => { if (s === this.session && this.view === 'join') this.redraw(); }, SLOW_HOST_MS + 100);
     this.redraw();
   }
 
@@ -122,6 +135,7 @@ export class OnlineScreens {
     });
     s.on('join', (p) => this.say('onlJoined', false, { name: p.name }));
     s.on('leave', (p) => this.say('onlLeft', false, { name: p.name }));
+    s.on('failed', (relay) => this.say(relay ? 'onlFriendFailedRelay' : 'onlFriendFailed', true));
     s.on('end', (why) => {
       if (s !== this.session) return;
       this.session = null;
@@ -167,15 +181,40 @@ export class OnlineScreens {
   }
 
   async addReply() {
-    const s = this.session;
-    if (!s || s.role !== 'host' || !this.reply.trim()) return;
-    try {
-      await s.accept(this.reply);
+    if (this.reply.trim() && (await this.acceptReply(this.reply)) === 'ok') {
       this.reply = '';
-      this.say('onlConnecting');
-    } catch (e) {
-      this.say(e.message === 'other' ? 'onlReplyOther' : e.message === 'full' ? 'onlFull' : e.message === 'version' ? 'onlEnded_version' : 'onlReplyBad', true);
+      this.redraw();
     }
+  }
+
+  // a friend's reply (link or code) -> 'ok' | 'other' | 'full' | 'version' | 'bad' | 'nohost'
+  async acceptReply(text) {
+    const s = this.session;
+    if (!s || s.role !== 'host') return 'nohost';
+    let result = 'ok';
+    try {
+      await s.accept(codeFrom(text));
+    } catch (e) {
+      result = ['other', 'full', 'version'].includes(e.message) ? e.message : 'bad';
+    }
+    if (result === 'ok') this.say('onlConnecting');
+    else this.say({ other: 'onlReplyOther', full: 'onlFull', version: 'onlEnded_version', bad: 'onlReplyBad' }[result], true);
+    return result;
+  }
+
+  // a reply link clicked in another tab (only a tab that hosts answers)
+  async replyFromTab(m) {
+    if (!m || m.t !== 'reply' || typeof m.code !== 'string' || this.session?.role !== 'host') return;
+    const result = await this.acceptReply(m.code);
+    this.channel?.postMessage({ t: 'replied', nonce: m.nonce, result });
+    if (result === 'ok' && !this.isOpen() && !this.on.inMatch?.()) this.open('lobby');
+  }
+
+  // a reply link opened in this very tab (pasted into its address bar)
+  replyFromLink(code) {
+    if (this.session?.role !== 'host') return;
+    if (!this.on.inMatch?.()) this.open('lobby');
+    this.acceptReply(code);
   }
 
   copy(text, what) {
@@ -255,7 +294,10 @@ export class OnlineScreens {
         h('div', { class: 'onl-copyrow' },
           h('input', { class: 'vgui-input onl-code', value: this.myReply, readonly: true, onfocus: (e) => e.target.select() }),
           ui.btn(this.copied === 'reply' ? t('onlCopied') : t('onlCopy'), () => this.copy(this.myReply, 'reply'), true)),
-        h('div', { class: 'onl-wait' }, t(s.link.state === 'open' ? 'onlConnecting' : 'onlWaitingHost')));
+        h('div', { class: 'onl-wait' }, t(s.link?.state === 'open' ? 'onlConnecting' : 'onlWaitingHost')));
+      if (s.link?.state !== 'open' && performance.now() - s.waitingSince > SLOW_HOST_MS) {
+        rows.push(h('div', { class: 'vgui-desc onl-slow' }, t(s.link?.relay ? 'onlSlowHostRelay' : 'onlSlowHost')));
+      }
     }
     return [h('div', { class: 'vgui-form' }, rows), [ui.btn(t('cancel'), () => this.leave())]];
   }
@@ -326,7 +368,9 @@ export class OnlineScreens {
 
   invitePanel() {
     const ui = this.ui, s = this.session, inv = this.invite;
-    const rows = [h('div', { class: 'ar-head' }, t('onlInvite')), h('div', { class: 'vgui-desc' }, t('onlInviteDesc'))];
+    const relay = relayServers(settings.relay).length > 0;
+    const rows = [h('div', { class: 'ar-head' }, t('onlInvite')), h('div', { class: 'vgui-desc' }, t('onlInviteDesc')),
+      h('div', { class: 'vgui-desc onl-relay' + (relay ? ' on' : '') }, t(relay ? 'onlRelayOnNote' : 'onlRelayOffNote'))];
     if (inv && inv.making) rows.push(h('div', { class: 'vgui-desc' }, t('onlMaking')));
     else if (inv) {
       rows.push(h('div', { class: 'onl-copyrow' },

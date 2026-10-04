@@ -603,6 +603,8 @@ const onlineUI = new OnlineScreens(ui, {
   ended() {
     if (game.net || game.client || netClient) leaveMatch();
   },
+  // playing in a match right now (windows shouldn't pop up over it)
+  inMatch: () => game.active && !game.over && !ui.isOpen(),
 });
 window.cs16 = { game, input, ui, settings, arenaStore, runner, arenaUI, onlineUI };
 applyQuality();
@@ -762,12 +764,15 @@ window.cs16.renderer = renderer;
 
 ui.showMain(false);
 document.getElementById('boot')?.remove();
-// opened from an invite link: join that game (the code leaves the address bar)
-{
-  const m = location.hash.match(/^#join=([A-Za-z0-9_-]+)$/);
-  if (m) {
-    history.replaceState(null, '', location.pathname + location.search);
-    onlineUI.openInvite(m[1]);
-  }
+// opened from an invite link: join that game (the code leaves the address
+// bar). A reply link pasted into this tab's address bar adds that friend.
+function fromAddress() {
+  const m = location.hash.match(/^#(join|reply)=([A-Za-z0-9_-]+)$/);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  if (m[1] === 'join') onlineUI.openInvite(m[2]);
+  else onlineUI.replyFromLink(m[2]);
 }
+fromAddress();
+addEventListener('hashchange', fromAddress);
 requestAnimationFrame(frame);

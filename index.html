@@ -25,6 +25,11 @@
         '<br><br>Oyunu yerel sunucu ile aç:<br><b>start.bat</b> dosyasına çift tıkla, sonra <b>http://localhost:8016</b> adresine git';
     }
   </script>
-  <script type="module" src="src/main.js"></script>
+  <script type="module">
+    // a friend's reply link only hands the reply to the game open in another
+    // tab, so it doesn't load the whole game
+    if (/^#reply=/.test(location.hash)) import('./src/replylink.js');
+    else import('./src/main.js');
+  </script>
 </body>
 </html>

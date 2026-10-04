@@ -11,27 +11,32 @@
 //   friend -> host  { t: 'enter' } into the running match, { t: 'leave' } back to the lobby
 //   host -> friend  { t: 'start', ... } the match as it is, { t: 'tolobby' } everyone back
 
-import { Link, newInviteId, decodeCode } from './net.js';
+import { Link, newInviteId, readInvite, replyId } from './net.js';
 
 // bumped whenever the messages change: host and friend must run the same game
 export const NET_VERSION = 1;
 export const MAX_PLAYERS = 10;     // host included
 export const MAX_TEAM = 5;         // humans on one team
 const PING_EVERY = 2000;
+const CONNECT_MS = 30000;          // host: how long a friend has to connect once their reply is in
+const PATIENCE_MS = 5 * 60000;     // friend: how long to wait for the host to add the reply
 export const TEAMS = ['auto', 'T', 'CT', 'spec'];
 
 const cleanName = (s) => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 20);
 
-// the address of this page with an invite inside (the part after # never
-// leaves the browser, so the code isn't sent to the website)
+// the address of this page with an invite (or a reply) inside: the part
+// after # never leaves the browser, so the code isn't sent to the website
 export function inviteUrl(code) {
   return location.origin + location.pathname + '#join=' + code;
 }
+export function replyUrl(code) {
+  return location.origin + location.pathname + '#reply=' + code;
+}
 
-// an invite code from a pasted link, or the code itself
+// a code from a pasted link, or the code itself
 export function codeFrom(text) {
   const s = String(text || '').trim();
-  const m = s.match(/#join=([A-Za-z0-9_-]+)/);
+  const m = s.match(/#(?:join|reply)=([A-Za-z0-9_-]+)/);
   return m ? m[1] : s.replace(/\s+/g, '');
 }
 
@@ -46,11 +51,13 @@ class Emitter {
 
 export class HostSession extends Emitter {
   // cfg: the match settings shown in the lobby (the host edits them)
-  constructor(name, cfg) {
+  // relay: { server, user, pass } from Options (the invites pass it on)
+  constructor(name, cfg, relay = null) {
     super();
     this.role = 'host';
     this.state = 'lobby';            // 'lobby' | 'match'
     this.cfg = cfg;
+    this.relay = relay;
     this.nextPid = 1;
     // pid 0 is the host
     this.players = [{ pid: 0, name: cleanName(name) || 'Host', team: 'auto', ping: 0, link: null }];
@@ -67,10 +74,10 @@ export class HostSession extends Emitter {
     if (this.players.length + this.invites.size >= MAX_PLAYERS) throw new Error('full');
     let id = newInviteId();
     while (this.invites.has(id)) id = newInviteId();
-    const link = new Link();
+    const link = new Link(this.relay);
     this.invites.set(id, link);
     const code = await link.invite(id);
-    return { id, code, url: inviteUrl(code) };
+    return { id, code, url: inviteUrl(code), relay: !!link.relay };
   }
 
   cancelInvite(id) {
@@ -80,23 +87,24 @@ export class HostSession extends Emitter {
     link.close('cancelled');
   }
 
-  // the friend's reply code arrived: connect them. Throws 'code' / 'other'
-  // (a reply to an invite we don't have) / 'full'
+  // the friend's reply code arrived: connect them. Throws 'code' / 'version'
+  // / 'other' (a reply to an invite we don't have) / 'full'
   async accept(code) {
     const clean = code.trim().replace(/\s+/g, '');
     // the code says which invite it answers
-    const { id } = decodeCode(clean, 'reply');
-    const link = this.invites.get(id);
+    const link = this.invites.get(replyId(clean));
     if (!link) throw new Error('other');
     if (this.players.length >= MAX_PLAYERS) throw new Error('full');
     await link.accept(clean);
-    this.invites.delete(id);
+    this.invites.delete(link.id);
     this.attach(link);
   }
 
+  // a friend who doesn't get through (or never says hello) is dropped; the
+  // host hears about it ('failed', relay: whether the relay was tried too)
   attach(link) {
     let player = null;
-    const timeout = setTimeout(() => { if (!player) link.close('timeout'); }, 30000);
+    const timeout = setTimeout(() => { if (!player) link.close(link.state === 'open' ? 'timeout' : 'failed'); }, CONNECT_MS);
     link.on('message', (msg) => {
       if (!msg || typeof msg !== 'object') return;
       if (!player) {
@@ -124,7 +132,10 @@ export class HostSession extends Emitter {
     link.on('open', () => link.ping());
     link.on('close', (why) => {
       clearTimeout(timeout);
-      if (!player) return;
+      if (!player) {
+        if (!this.closed && why === 'failed') this.emit('failed', !!link.relay);
+        return;
+      }
       this.players = this.players.filter((p) => p !== player);
       this.emit('leave', player, why);
       this.changed();
@@ -222,22 +233,38 @@ export class ClientSession extends Emitter {
     super();
     this.role = 'client';
     this.name = cleanName(name) || 'Player';
-    this.link = new Link();
+    this.link = null;       // made from the invite (it may bring the host's relay)
     this.pid = -1;
     this.lobby = null;
     this.closed = false;
-    this.link.on('open', () => {
-      this.link.send({ t: 'hello', name: this.name, v: NET_VERSION });
-      this.emit('open');
-    });
-    this.link.on('message', (msg) => this.message(msg));
-    this.link.on('close', (why) => this.end(this.why || why));
-    this.pinger = setInterval(() => this.link.ping(), PING_EVERY);
+    this.waitTimer = 0;
+    this.waitingSince = 0;   // when our reply was ready
+    this.pinger = setInterval(() => this.link?.ping(), PING_EVERY);
   }
 
-  // the invite from the link: returns the reply code to send to the host
+  // the invite from the link: returns the reply code to send to the host.
+  // Throws 'code' / 'version' (an invite from another version of the game)
   async answer(code) {
-    return this.link.answer(code);
+    const inv = readInvite(code);
+    const link = this.link = new Link(inv.relay);
+    link.on('open', () => {
+      clearTimeout(this.waitTimer);
+      link.send({ t: 'hello', name: this.name, v: NET_VERSION });
+      this.emit('open');
+    });
+    link.on('message', (msg) => this.message(msg));
+    link.on('close', (why) => {
+      // before the first connection only the wait ends it ('expired'); a
+      // 'failed' later is a connection that broke
+      if (why === 'expired' && link.relay) why = 'expiredRelay';
+      else if (why === 'failed') why = 'closed';
+      this.end(this.why || why);
+    });
+    const reply = await link.answer(inv);
+    // the host has a few minutes to add the reply
+    this.waitTimer = setTimeout(() => link.close('expired'), PATIENCE_MS);
+    this.waitingSince = performance.now();
+    return reply;
   }
 
   message(msg) {
@@ -265,23 +292,24 @@ export class ClientSession extends Emitter {
   }
 
   setTeam(team) {
-    this.link.send({ t: 'team', team });
+    this.link?.send({ t: 'team', team });
   }
 
   send(msg, fast = false) {
-    return this.link.send(msg, fast);
+    return this.link ? this.link.send(msg, fast) : false;
   }
 
   end(why) {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.pinger);
+    clearTimeout(this.waitTimer);
     this.emit('end', why);
   }
 
   close() {
     this.why = 'left';
-    this.link.close('left');
+    this.link?.close('left');
     this.end('left');
   }
 }

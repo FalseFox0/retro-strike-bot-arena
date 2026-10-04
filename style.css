@@ -728,6 +728,18 @@ em.hk, .scoreboard em.hk, .me-board em.hk { color: #ff3b2b; font-style: normal; 
 .onl-invite .vgui-desc { max-width: none; }
 .onl-settings { min-height: 0; }
 .onl-settings .create-game { flex-direction: column; }
+.onl-relay { font-size: 11px; color: #e0b070; }
+.onl-relay.on { color: #8fd18a; }
+.onl-slow { margin-top: 10px; color: #e0c090; }
+/* the relay in Options -> Game */
+.opt-relaybox { margin-top: 14px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.opt-relay { width: 300px; max-width: 100%; }
+.opt-relaytest { display: flex; gap: 12px; align-items: center; margin-top: 6px; }
+.opt-relayres { color: #8fd18a; }
+.opt-relayres.bad { color: #f0a090; }
+/* a reply link opened in its own tab (replylink.js) */
+.boot-text .rl-row { display: flex; gap: 6px; margin-top: 10px; }
+.boot-text .rl-code { flex: 1; min-width: 0; width: 420px; max-width: 100%; font-family: monospace; font-size: 11px; }
 @media (max-width: 760px) {
   .onl-start, .onl-cols { display: flex; flex-direction: column; }
   .onl-left { flex: none; }

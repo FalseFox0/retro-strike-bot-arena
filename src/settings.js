@@ -71,6 +71,9 @@ function defaults() {
     // free-for-all); bots take the places no human has
     playerName: '',
     onlineMatch: { ...structuredClone(match), fill: 5 },
+    // the host's relay (TURN server) for networks that block direct
+    // connections; the invite links pass it on to the friends
+    relay: { server: '', user: '', pass: '' },
     guns: { primary: 'ak47', secondary: 'deagle', remember: false },
   };
 }
@@ -214,6 +217,8 @@ function load() {
     out.onlineMatch = cleanMatch({ ...d.onlineMatch, ...(s.onlineMatch || {}) }, d.onlineMatch, s.onlineMatch);
     out.onlineMatch.fill = num(out.onlineMatch.fill, 1, 10, d.onlineMatch.fill);
     out.playerName = typeof out.playerName === 'string' ? out.playerName.slice(0, 20) : '';
+    const r = s.relay && typeof s.relay === 'object' ? s.relay : {};
+    out.relay = Object.fromEntries(['server', 'user', 'pass'].map((k) => [k, typeof r[k] === 'string' ? r[k].slice(0, 200) : '']));
     out.hackCfg = hackCfg(out.hackCfg);
     out.hackSpecView = pick(out.hackSpecView, ['off', 'eye', 'all'], d.hackSpecView);
     for (const k of ['invertMouse', 'rawInput', 'fullscreen', 'showFps', 'pauseInMenu', 'tracers']) if (typeof out[k] !== 'boolean') out[k] = d[k];
