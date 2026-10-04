@@ -34,6 +34,7 @@ export class Grenades {
     this.mat = new THREE.MeshLambertMaterial({ map: weaponAtlas(T).texture, vertexColors: true });
     this.spritesPerCloud = SMOKE_SPRITES;
     this.seeThrough = false; // hacker mode: the view has no smoke on
+    this.veil = 0;           // how far the puffs in front of the eyes are faded (render)
   }
 
   setQuality(q) {
@@ -278,11 +279,10 @@ export class Grenades {
         for (const m of this.list) if (m.cloud === c) m.done = true;
       } else {
         c = { sprites: [], mats: [] };
-        for (let i = 0; i < 3; i++) {
-          c.mats.push(new THREE.SpriteMaterial({ map: this.T.smoke, transparent: true, depthWrite: false, opacity: 0, rotation: i * 2.1 }));
-        }
+        // a material each, so every puff can fade on its own (see render)
         for (let i = 0; i < SMOKE_SPRITES; i++) {
-          const s = new THREE.Sprite(c.mats[i % 3]);
+          c.mats.push(new THREE.SpriteMaterial({ map: this.T.smoke, transparent: true, depthWrite: false, opacity: 0, rotation: (i % 3) * 2.1 }));
+          const s = new THREE.Sprite(c.mats[i]);
           s.visible = false;
           this.scene.add(s);
           c.sprites.push(s);
@@ -308,6 +308,7 @@ export class Grenades {
       c.targets.push({ x: Math.cos(a) * r, y: ty, z: Math.sin(a) * r, size: 110 + Math.random() * 70, ph: Math.random() * 6 });
       c.sprites[i].visible = i < this.spritesPerCloud;
     }
+    c.used = this.spritesPerCloud;
     n.cloud = c;
     this.clouds.push(c);
     g.recorder?.smoke(n.pos);
@@ -358,19 +359,41 @@ export class Grenades {
         n.mesh.position.y = n.pos.y + 0.9;
       }
     }
+    // Puffs right in front of the eyes each cover the whole screen, and
+    // drawing them all made smoke fights slow. They fade out only as far as
+    // the grey "inside smoke" screen (the HUD) takes over, so nothing shows
+    // through; the puffs further in still draw.
+    const cam = this.g.camera;
+    let veil = 0, cx = 0, cy = 0, cz = 0, fx = 0, fy = 0, fz = 0;
+    if (cam && this.clouds.length) {
+      cam.updateMatrixWorld();
+      const m = cam.matrixWorld.elements;
+      cx = m[12]; cy = m[13]; cz = m[14];
+      fx = -m[8]; fy = -m[9]; fz = -m[10];
+      veil = Math.min(1, this.inside(cx, cy, cz) * 1.25);
+    }
+    this.veil = veil; // the HUD's grey screen thickens by as much (game.js)
     for (const c of this.clouds) {
       const t = now - c.start;
       const e = this.grow(c, now);
       // hacker mode's no smoke: only a faint haze is left
-      for (const m of c.mats) m.opacity = 0.95 * c.alpha * (this.seeThrough ? 0.1 : 1);
-      for (let i = 0; i < c.sprites.length; i++) {
+      const op = 0.95 * c.alpha * (this.seeThrough ? 0.1 : 1);
+      for (let i = 0; i < c.used; i++) {
         const s = c.sprites[i];
-        if (!s.visible) continue;
         const tg = c.targets[i];
         const drift = Math.sin(now * 0.3 + tg.ph) * 4;
         s.position.set(c.pos.x + tg.x * e + drift, c.pos.y + 6 + (tg.y - 6) * e + t * 0.4, c.pos.z + tg.z * e - drift);
         const size = tg.size * (0.3 + 0.7 * e) * (1 + Math.max(0, t - SMOKE_TIME) * 0.08);
         s.scale.set(size, size, 1);
+        let k = 1;
+        if (veil > 0) {
+          // how far ahead of the eyes, against the puff's size
+          const z = (s.position.x - cx) * fx + (s.position.y - cy) * fy + (s.position.z - cz) * fz;
+          const near = Math.min(1, Math.max(0, (z - 0.1 * size) / (0.4 * size)));
+          k = 1 - (1 - near * near * (3 - 2 * near)) * veil;
+        }
+        c.mats[i].opacity = op * k;
+        s.visible = k > 0.02;
       }
     }
   }
@@ -378,6 +401,7 @@ export class Grenades {
   clear() {
     for (const n of this.list) this.scene.remove(n.mesh);
     this.list = [];
+    this.veil = 0;
     for (const c of this.clouds) {
       for (const s of c.sprites) s.visible = false;
       c.free = true;

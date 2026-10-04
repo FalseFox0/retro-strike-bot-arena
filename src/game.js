@@ -2172,7 +2172,10 @@ export class Game {
       showCross: !(w && w.def.scope),
       scoped,
       flash: vh.noflash ? 0 : this.flashAlpha(),
-      smoke: this.grenades.inside(cam.position.x, cam.position.y, cam.position.z) * (vh.nosmoke ? 0.1 : 0.96),
+      // the grey screen inside smoke; it thickens as the puffs in front of the
+      // eyes fade out (grenades.render), so nothing shows through
+      smoke: vh.nosmoke ? this.grenades.inside(cam.position.x, cam.position.y, cam.position.z) * 0.1
+        : 1 - (1 - this.grenades.inside(cam.position.x, cam.position.y, cam.position.z) * 0.96) * (1 - 0.9 * this.grenades.veil ** 2),
       statusText,
       statusColor,
     }, dt, this.time);

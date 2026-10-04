@@ -561,8 +561,15 @@ export function buildMap(name, scene, T) {
   // Sky dome follows the camera.
   const skyGeo = new THREE.SphereGeometry(7000, 24, 12);
   const skyMat = new THREE.MeshBasicMaterial({ map: T[def.sky || 'sky'], side: THREE.BackSide, depthWrite: false, fog: false });
+  // Drawn after the solid world at the far end of the depth range, so only
+  // the pixels where the sky really shows get painted (drawing it first
+  // painted the whole screen twice).
+  skyMat.onBeforeCompile = (s) => {
+    s.vertexShader = s.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n\tgl_Position.z = gl_Position.w;');
+  };
+  skyMat.customProgramCacheKey = () => 'sky-far';
   const sky = new THREE.Mesh(skyGeo, skyMat);
-  sky.renderOrder = -1;
+  sky.renderOrder = 100;
   scene.add(sky);
   disposables.push(skyGeo, skyMat);
 

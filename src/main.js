@@ -28,7 +28,8 @@ setLang(settings.lang);
 // Graphics quality presets
 const QUALITY = {
   low: { pixelRatio: 0.7, aa: false, aniso: 1, effects: 0.5, smoke: false, dlights: false },
-  medium: { pixelRatio: 1, aa: true, aniso: 4, effects: 1, smoke: true, dlights: true },
+  // no antialiasing: on built-in graphics it doubled the time to draw a frame
+  medium: { pixelRatio: 1, aa: false, aniso: 4, effects: 1, smoke: true, dlights: true },
   high: { pixelRatio: Math.min(window.devicePixelRatio || 1, 2), aa: true, aniso: 8, effects: 1, smoke: true, dlights: true },
 };
 const quality = () => QUALITY[settings.quality] || QUALITY.medium;

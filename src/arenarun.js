@@ -342,9 +342,12 @@ export class ArenaRunner {
     this.emit({ type: 'finished' });
   }
 
-  // finish the matches being played, then wait
+  // finish the matches being played, then wait. auto: a normal game is
+  // starting, and threads finishing their matches would slow it down, so
+  // they stop now (the matches go back in the queue)
   pause(auto = false) {
     if (this.state !== 'running') return;
+    if (auto) this.dropJobs();
     this.state = 'paused';
     this.autoPaused = auto;
     this.persist(true);

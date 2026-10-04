@@ -650,7 +650,9 @@ export class SoundSystem {
     if (this.ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    this.ctx = new AC();
+    // A 30 ms buffer instead of the smallest one (10 ms): a busy computer
+    // couldn't always refill the small one in time, which crackled.
+    this.ctx = new AC({ latencyHint: 0.03 });
     this.master = this.ctx.createGain();
     this.master.gain.value = this.volume;
     const comp = this.ctx.createDynamicsCompressor();
@@ -789,6 +791,9 @@ export class SoundSystem {
     let dist = 0;
     if (opts.pos && this.lx !== undefined) dist = Math.hypot(opts.pos.x - this.lx, opts.pos.y - this.ly, opts.pos.z - this.lz);
     if (opts.pos && this.voices >= MAX_VOICES && (dist > 700 || this.voices >= MAX_VOICES * 2)) return;
+    // too far away to be heard over the rest: don't give the audio thread the work
+    const ref = opts.ref ?? 200;
+    if (opts.pos && dist > ref && (opts.volume ?? 1) * ref / (ref + (opts.rolloff ?? 1) * (dist - ref)) < 0.012) return;
     const src = this.ctx.createBufferSource();
     this.voices++;
     src.onended = () => { this.voices--; };
