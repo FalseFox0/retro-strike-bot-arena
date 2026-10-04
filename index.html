@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Retro Strike: Bot Arena</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "three": "./lib/three.module.js" } }</script>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="hud" class="hidden"></div>
+  <div id="ui"></div>
+  <div id="boot">
+    <div class="boot-box">
+      <div class="boot-title">Retro Strike: Bot Arena</div>
+      <div class="boot-text" id="boot-text">Loading...</div>
+    </div>
+  </div>
+  <script>
+    // ES modules don't load from file:// — explain how to start it instead.
+    if (location.protocol === 'file:') {
+      document.getElementById('boot-text').innerHTML =
+        'Open the game through the local server:<br>double-click <b>start.bat</b>, then go to <b>http://localhost:8016</b>' +
+        '<br><br>Oyunu yerel sunucu ile aç:<br><b>start.bat</b> dosyasına çift tıkla, sonra <b>http://localhost:8016</b> adresine git';
+    }
+  </script>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# editor and tool settings (local only)
+.vscode/
+.idea/
+# Python and Windows leftovers
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini

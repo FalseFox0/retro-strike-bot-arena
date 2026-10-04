@@ -1,0 +1,3 @@
+# store text files with Unix line endings; keep start.bat Windows-style
+* text=auto
+*.bat text eol=crlf
