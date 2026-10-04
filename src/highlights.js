@@ -23,7 +23,7 @@ const PRE = 3.5, POST = 2; // seconds of clip before the first moment and after 
 const MAX_LEN = 32;
 const MAX_CLIPS = 3;     // per match
 // effects a clip keeps (the rest come from the players: muzzle flashes, shells, tracers)
-const FX = new Set(['impact', 'decal', 'glassHit', 'blood', 'explosion', 'bigExplosion', 'flashBurst', 'splash', 'sparks', 'puff', 'dust']);
+export const FX = new Set(['impact', 'decal', 'glassHit', 'blood', 'explosion', 'bigExplosion', 'flashBurst', 'splash', 'sparks', 'puff', 'dust']);
 
 // plain data that can travel between threads (vectors become [x, y, z])
 const plain = (v) => {

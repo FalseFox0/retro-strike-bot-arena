@@ -35,6 +35,7 @@ export class Grenades {
     this.spritesPerCloud = SMOKE_SPRITES;
     this.seeThrough = false; // hacker mode: the view has no smoke on
     this.veil = 0;           // how far the puffs in front of the eyes are faded (render)
+    this.serial = 0;         // grenades in the air get a number (online, the friends' games know them by it)
   }
 
   setQuality(q) {
@@ -312,6 +313,7 @@ export class Grenades {
     n.cloud = c;
     this.clouds.push(c);
     g.recorder?.smoke(n.pos);
+    g.net?.smoke(n.pos);
     g.soundAt('smoke_hiss', n.pos, 0.9, 260);
   }
 

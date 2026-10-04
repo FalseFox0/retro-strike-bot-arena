@@ -32,6 +32,7 @@ export class Items {
     this.enabled = false; // can players drop and pick up guns in this match?
     this.mat = new THREE.MeshLambertMaterial({ map: weaponAtlas(game.textures).texture, vertexColors: true });
     this.nextReset = Infinity;
+    this.serial = 0; // each thing on the ground gets a number (online, the friends' games know it by it)
   }
 
   // a new match: drops allowed in bomb defusal and on maps that say so
@@ -50,6 +51,7 @@ export class Items {
   clear() {
     for (const it of this.list) this.g.scene.remove(it.mesh);
     this.list = [];
+    this.g.net?.itemsCleared();
   }
 
   dispose() {
@@ -72,8 +74,10 @@ export class Items {
       noPickup: g.time + 0.7, spin: (Math.random() - 0.5) * 8, born: g.time, mapGun: false,
       // tumbling in the air (rad/s), and the flat way it lies when it lands
       tumble: 0, restZ: kind === 'weapon' ? Math.PI / 2 : 0, restPos: pos.clone(), nextKick: 0,
+      nid: ++this.serial,
     };
     this.list.push(it);
+    this.g.net?.itemAdded(it);
     return it;
   }
 
@@ -82,6 +86,7 @@ export class Items {
     if (i < 0) return;
     this.g.scene.remove(it.mesh);
     this.list.splice(i, 1);
+    this.g.net?.itemRemoved(it);
   }
 
   // the map's own guns and grenades, lying where the map puts them

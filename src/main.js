@@ -21,6 +21,10 @@ import { Recorder } from './highlights.js';
 import { loadClip, removeClip } from './clipstore.js';
 import { ArenaRunner } from './arenarun.js';
 import { ArenaScreens } from './arenaui.js';
+import { OnlineScreens } from './onlineui.js';
+import { NetHost } from './nethost.js';
+import { NetClient } from './netclient.js';
+import { hackCfg, isHacking } from './hacks.js';
 import { hasTeams } from './settings.js';
 
 setLang(settings.lang);
@@ -214,15 +218,23 @@ function withLoading(name, fn) {
   el.id = 'boot';
   el.innerHTML = `<div class="boot-box"><div class="boot-title">${name}</div><div class="boot-text">${t('loadingMap')}</div></div>`;
   document.body.append(el);
-  // let the browser paint it before the work starts
-  requestAnimationFrame(() => setTimeout(() => {
-    try {
-      loadMap(name);
-    } finally {
-      el.remove();
-    }
-    fn();
-  }, 30));
+  // let the browser paint it before the work starts (a hidden tab paints
+  // nothing, and an online match can't wait for it: a timer goes too)
+  let started = false;
+  const go = () => {
+    if (started) return;
+    started = true;
+    setTimeout(() => {
+      try {
+        loadMap(name);
+      } finally {
+        el.remove();
+      }
+      fn();
+    }, 30);
+  };
+  requestAnimationFrame(go);
+  setTimeout(go, 250);
 }
 
 // Bot Arena characters for Create Game's bot slots: the ones ticked there
@@ -248,6 +260,27 @@ let watchPaused = false;
 let replayClip = null;
 let replayList = null;
 const watching = () => !!(game.active && game.cfg && game.cfg.arena);
+// online: 'host' or 'client' while in an online match
+const onlineRole = () => (game.active ? (game.net ? 'host' : game.client ? 'client' : null) : null);
+// a friend's match being loaded (its messages wait in it), and the host's
+// trip back to the lobby after a match
+let netClient = null;
+let lobbyTimer = 0;
+const LOBBY_AFTER = 20; // seconds the final scoreboard shows online
+
+// out of a match, back to the main menu
+function leaveMatch() {
+  clearTimeout(lobbyTimer);
+  netClient = null;
+  radio.cancel();
+  game.stop();
+  input.gameActive = false;
+  releasePointer();
+  leaveFullscreen();
+  ui.showMain(false);
+  // a Bot Arena battle that waited for the match goes on
+  if (runner.autoPaused) runner.resume();
+}
 
 const handlers = {
   start(cfg) {
@@ -281,6 +314,21 @@ const handlers = {
     enterPlay();
   },
   disconnect() {
+    // online: the host ends the match for everyone (after asking), a friend goes back to the lobby
+    if (game.net && !game.over) {
+      ui.confirm(t('onlEndMatch'), t('onlEndMatchAsk'), t('onlEndMatch'), () => handlers.onlineToLobby());
+      return;
+    }
+    if (game.net) {
+      handlers.onlineToLobby();
+      return;
+    }
+    if (game.client || netClient) {
+      game.client?.send({ t: 'leave' });
+      leaveMatch();
+      onlineUI.open('lobby');
+      return;
+    }
     // leaving a watched Bot Arena match before the end: it doesn't count
     // (and a bet on it comes back)
     const arena = watching();
@@ -303,6 +351,53 @@ const handlers = {
   },
   // ---------- Bot Arena ----------
   arena: () => arenaUI.open(),
+  online: () => onlineUI.open(),
+  onlineRole,
+  // ---------- online ----------
+  // the host starts the match from the lobby (everyone in the lobby comes along)
+  startOnline(session) {
+    if (runner.state === 'running') runner.pause(true);
+    const cfg = { ...structuredClone(settings.onlineMatch), online: true };
+    // Bot Arena characters for the bots' places (when the lobby picked a save)
+    const chars = pickChars({ ...cfg, botsT: cfg.fill, botsCT: cfg.fill, bots: cfg.fill }) || [];
+    soundSys.init();
+    soundSys.resume();
+    ui.hideAll();
+    withLoading(cfg.map, () => {
+      soundSys.finish();
+      ambience.update(map.def.ambience);
+      game.start(cfg);
+      game.net = new NetHost(game, session, chars);
+      game.net.begin();
+      game.prewarm(renderer);
+      enterPlay();
+    });
+  },
+  // a friend's game: the host started the match (or let us into the running one)
+  joinOnline(session, start) {
+    if (runner.state === 'running') runner.pause(true);
+    const client = new NetClient(session, start);
+    netClient = client;
+    soundSys.init();
+    soundSys.resume();
+    ui.hideAll();
+    withLoading(start.cfg.map, () => {
+      // (gone back to the lobby meanwhile)
+      if (netClient !== client) return;
+      soundSys.finish();
+      ambience.update(map.def.ambience);
+      game.startClient(client);
+      client.send({ t: 'hackcfg', cfg: settings.hackCfg });
+      game.prewarm(renderer);
+      enterPlay();
+    });
+  },
+  // the match is over (or the host ended it): everyone back to the lobby
+  onlineToLobby() {
+    if (game.net) game.net.backToLobby();
+    leaveMatch();
+    onlineUI.open('lobby');
+  },
   arenaWatching: watching,
   // play a match here to watch it (spec: one the runner gave out for this)
   arenaWatch(spec) {
@@ -377,7 +472,10 @@ const handlers = {
   },
   arenaSaves: () => arenaStore.saves,
   teamSelected(team) {
-    game.chooseTeam(team);
+    // online, the host's game decides (five people a team at most)
+    if (game.client) game.client.send({ t: 'jointeam', team });
+    else if (game.net) game.net.joinTeam(game.human, team);
+    else game.chooseTeam(team);
     game.prewarm(renderer);
     // Classic spawns right away and may have put the weapon menu up instead of the team menu
     if (ui.dialog?.name === 'weapons') {
@@ -397,14 +495,46 @@ const handlers = {
   mapPreview: (name) => mapPreview(name),
   // hacker mode (the Esc menu's Hacks window)
   hackState: () => ({ allowed: !!(game.active && game.cfg && game.cfg.hacks && game.human), hacks: game.human ? game.human.hacks : {} }),
-  setHack: (key, on) => game.human && game.setHack(game.human, key, on),
-  setHackCfg: (cfg) => game.human && game.setHackCfg(game.human, cfg),
-  hackNews: () => game.active && game.flushHackNews(true),
+  // (a friend online switches here at once and tells the host, which tells everyone)
+  setHack(key, on) {
+    const h = game.human;
+    if (!h) return false;
+    if (!game.client) return game.setHack(h, key, on);
+    if (!game.cfg.hacks) return false;
+    h.hacks[key] = !!on;
+    h.hacking = isHacking(h);
+    game.client.send({ t: 'hack', key, on: !!on });
+    return true;
+  },
+  setHackCfg(cfg) {
+    const h = game.human;
+    if (!h) return;
+    if (game.client) {
+      h.hackCfg = hackCfg(cfg);
+      game.client.send({ t: 'hackcfg', cfg });
+    } else game.setHackCfg(h, cfg);
+  },
+  hackNews() {
+    if (game.client) game.client.send({ t: 'hacknews' });
+    else if (game.active) game.flushHackNews(true);
+  },
 };
 
 const hooks = {
   onMatchEnd(title, html) {
     releasePointer();
+    // online: the final scoreboard, then everyone back to the lobby together
+    if (game.net || game.client) {
+      const host = !!game.net;
+      ui.showMatchEnd(title, html, null, { host, until: performance.now() + LOBBY_AFTER * 1000 });
+      if (host) {
+        clearTimeout(lobbyTimer);
+        lobbyTimer = setTimeout(() => {
+          if (game.net && game.over) handlers.onlineToLobby();
+        }, LOBBY_AFTER * 1000);
+      }
+      return;
+    }
     if (game.cfg.arena) {
       // a watched Bot Arena match counts like the others (and settles a bet on it)
       const res = game.arenaResult();
@@ -453,7 +583,28 @@ const arenaUI = new ArenaScreens(ui, runner, arenaStore, {
   watch: (spec) => handlers.arenaWatch(spec),
   replay: (save, entry, list) => handlers.arenaReplay(save, entry, list),
 });
-window.cs16 = { game, input, ui, settings, arenaStore, runner, arenaUI };
+// online play: the Play online window and its sessions
+const onlineUI = new OnlineScreens(ui, {
+  start: (s) => handlers.startOnline(s),
+  joinMatch: (s) => s.send({ t: 'enter' }),
+  // the match's own messages
+  message(s, msg) {
+    if (s.role !== 'client') return;
+    if (msg && msg.t === 'start') handlers.joinOnline(s, msg);
+    else if (msg && msg.t === 'tolobby') {
+      if (game.client || netClient) {
+        leaveMatch();
+        onlineUI.open('lobby');
+      }
+    } else if (game.client) game.client.receive(msg);
+    else if (netClient) netClient.receive(msg);
+  },
+  // the online game is over (the host closed it, the connection broke, or we left)
+  ended() {
+    if (game.net || game.client || netClient) leaveMatch();
+  },
+});
+window.cs16 = { game, input, ui, settings, arenaStore, runner, arenaUI, onlineUI };
 applyQuality();
 
 document.addEventListener('pointerlockchange', () => {
@@ -491,7 +642,8 @@ function onCanvasClick() {
 }
 
 window.addEventListener('beforeunload', (e) => {
-  if (game.active && !game.over) {
+  // (closing the page would also end an online game for everyone in it)
+  if ((game.active && !game.over) || onlineUI.session) {
     e.preventDefault();
     e.returnValue = '';
   }
@@ -508,19 +660,37 @@ function resize() {
 window.addEventListener('resize', resize);
 
 let last = performance.now();
+let lastDrawn = performance.now();
 let acc = 0;
 let orbit = 0;
 
 function frame(now) {
   requestAnimationFrame(frame);
+  lastDrawn = performance.now();
+  advance(true);
+}
+
+function advance(draw) {
+  const now = performance.now();
   let dt = (now - last) / 1000;
   last = now;
   if (dt > 0.1) dt = 0.1;
   if (window.cs16.freeze) return; // debugging aid: stop the loop, step by hand
-  step(dt);
+  step(dt, draw);
 }
 
-function step(dt) {
+// A hidden tab gets no frames to draw. An online match can't stop for that
+// (the host's game runs everyone, a friend's keys have to keep going), so a
+// worker's clock moves the game on then, without drawing anything.
+{
+  const pulse = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 20);'], { type: 'text/javascript' })));
+  pulse.onmessage = () => {
+    if (performance.now() - lastDrawn > 150 && (game.net || game.client)) advance(false);
+  };
+}
+
+// draw: false when the tab is hidden (the game moves on, nothing is drawn)
+function step(dt, draw = true) {
   const [mx, my] = input.takeMouse();
 
   if (game.active) {
@@ -528,7 +698,9 @@ function step(dt) {
     // keys pressed while a menu is open belong to the menu, not the game
     if (menuOpen) input.takePressed();
     else game.handleInput();
-    const paused = (ui.pausesGame() && settings.pauseInMenu) || game.needsTeam();
+    // (an online match never stops: the others play on)
+    const online = !!(game.net || game.client);
+    const paused = !online && ((ui.pausesGame() && settings.pauseInMenu) || game.needsTeam());
     if (input.locked && !menuOpen) game.look(mx, my);
     // a watched Bot Arena match can run slower or faster, or stand still
     const rate = watching() ? (watchPaused ? 0 : watchRate * (game.replay ? game.replay.speed() : 1)) : 1;
@@ -546,9 +718,14 @@ function step(dt) {
       }
       if (n === max) acc = 0;
     }
+    if (!draw) {
+      game.flushHackNews();
+      return;
+    }
     game.render(still ? 1 : acc / TICK, still ? 0 : dt * rate);
     effects.update(still ? 0 : dt * rate);
   } else {
+    if (!draw) return;
     // slow fly-around (or pan) behind the main menu
     orbit += dt * 0.04;
     camera.fov = vfov(90);
@@ -585,4 +762,12 @@ window.cs16.renderer = renderer;
 
 ui.showMain(false);
 document.getElementById('boot')?.remove();
+// opened from an invite link: join that game (the code leaves the address bar)
+{
+  const m = location.hash.match(/^#join=([A-Za-z0-9_-]+)$/);
+  if (m) {
+    history.replaceState(null, '', location.pathname + location.search);
+    onlineUI.openInvite(m[1]);
+  }
+}
 requestAnimationFrame(frame);

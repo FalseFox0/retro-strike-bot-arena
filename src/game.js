@@ -4,10 +4,12 @@
 // spectator; its background matches run with `headless` (nothing drawn).
 // Bomb defusal's own rules (money, the C4, dropped guns) are in bomb.js,
 // Gun Game's (the gun ladder) in gungame.js.
+// Online, the host's game is the real one and runs everyone (nethost.js
+// sends it to the friends); a friend's game only shows it (netclient.js).
 
 import * as THREE from '../lib/three.module.js';
 import { DEG, vfov, HULL, PM } from './config.js';
-import { t } from './i18n.js';
+import { t, tmsg } from './i18n.js';
 import { settings, saveSettings } from './settings.js';
 import { Player, rayVsPlayer, dirFromAngles, HITGROUP_MULT } from './player.js';
 import { playerMove } from './movement.js';
@@ -103,6 +105,8 @@ export class Game {
     this.watchSpeed = 1;     // Bot Arena: how fast the watched match plays
     this.recorder = null;    // Bot Arena: writes the match down for highlights (highlights.js)
     this.replay = null;      // Bot Arena: a highlight being played back (replay.js)
+    this.net = null;         // online, hosting: sends the match to the friends (nethost.js)
+    this.client = null;      // online, a friend: the host's match shown here (netclient.js)
     this.pov = null; // whose eyes the camera is in: ours, the player we watch in first person, or nobody
     this.viewY = null;
     this.othersBuf = [];
@@ -190,9 +194,9 @@ export class Game {
     this.effects.clear();
     this.hud.clearFeed();
     this.hud.setVisible(true);
-    // Bot Arena: we only watch
+    // Bot Arena: we only watch (online, nethost.js puts everyone in a team)
     if (cfg.arena) this.joinSpectators();
-    else if (this.ffa) this.chooseTeam('FFA');
+    else if (this.ffa && !cfg.online) this.chooseTeam('FFA');
   }
 
   // Compile shaders for everything that can show up during the match.
@@ -243,6 +247,14 @@ export class Game {
     if (this.recorder) {
       this.recorder.detach();
       this.recorder = null;
+    }
+    if (this.net) {
+      this.net.detach();
+      this.net = null;
+    }
+    if (this.client) {
+      this.client.dispose();
+      this.client = null;
     }
     if (this.replay) {
       this.replay.dispose();
@@ -296,14 +308,23 @@ export class Game {
     return this.active && !this.ffa && !this.human.team && !this.human.spectator;
   }
 
-  autoTeam() {
+  // Auto-select: the team with fewer players. Online, bots give their place
+  // to people, so it goes by people first (friends end up spread out).
+  autoTeam(p = this.human) {
     if (!this.botsCreated) return Math.random() < 0.5 ? 'T' : 'CT';
-    const n = (team) => this.players.filter((p) => p.team === team && p !== this.human).length;
-    return n('T') <= n('CT') ? 'T' : 'CT';
+    const n = (team, people) => this.players.filter((o) => o.team === team && o !== p && (!people || !o.isBot)).length;
+    if (this.cfg.online) {
+      const d = n('T', true) - n('CT', true);
+      if (d) return d < 0 ? 'T' : 'CT';
+    }
+    if (n('T') !== n('CT')) return n('T') < n('CT') ? 'T' : 'CT';
+    return Math.random() < 0.5 ? 'T' : 'CT';
   }
 
-  chooseTeam(choice) {
-    const h = this.human;
+  // choice: 'T', 'CT', 'AUTO', 'SPEC' (or 'FFA' to start free-for-all);
+  // p: who chooses (online, the friends choose on the host's game too)
+  chooseTeam(choice, p = this.human) {
+    const h = p;
     if (choice === 'FFA') {
       h.team = null;
       this.makeModel(h, Math.random() < 0.5 ? 'T' : 'CT');
@@ -317,7 +338,15 @@ export class Game {
       this.joinSpectators();
       return;
     }
-    const team = choice === 'AUTO' ? this.autoTeam() : choice;
+    // free-for-all has no teams: back from watching into the match
+    if (this.ffa) {
+      if (!h.spectator) return;
+      h.spectator = false;
+      h.respawnAt = this.time + 0.5;
+      this.net?.rosterChanged();
+      return;
+    }
+    const team = choice === 'AUTO' ? this.autoTeam(h) : choice;
     h.spectator = false;
     if (!this.botsCreated) {
       h.team = team;
@@ -337,19 +366,20 @@ export class Game {
       h.alive = false;
       h.deaths++;
       h.diedAt = this.time;
-      this.deathCam = { pos: h.pos.clone(), yaw: h.yaw, pitch: h.pitch, killer: null, start: this.time };
+      this.tell(h, 'died', -1);
     }
     h.team = team;
     this.makeModel(h, team);
     // uneven teams are evened out by auto team balance (when it's on)
-    this.hud.message(t('teamChanged', { name: h.name, team: t(team === 'T' ? 'teamT' : 'teamCT') }), this.time);
+    this.tellAll('msg', ['teamChanged', { name: h.name, team: [team === 'T' ? 'teamT' : 'teamCT'] }]);
     if (!this.roundBased()) h.respawnAt = this.time + 0.5;
     else if (old) this.checkRoundEnd();
+    this.net?.rosterChanged();
   }
 
   // watch the match without playing (team menu: 6. Spectate)
-  joinSpectators() {
-    const h = this.human;
+  joinSpectators(p = this.human) {
+    const h = p;
     if (h.spectator) return;
     if (h.alive) {
       this.dropOnDeath(h);
@@ -360,16 +390,15 @@ export class Game {
     h.team = null;
     h.spectator = true;
     h.respawnAt = 0;
-    this.deathCam = null;
-    this.specTarget = null;
-    this.radio.closeMenu();
+    this.tell(h, 'watch');
     if (!this.botsCreated) {
       this.createBots();
       this.hud.centerPrint(t('gameCommencing'), this.time, 2.5);
       if (this.roundBased()) this.startRound();
     } else if (this.roundBased()) this.checkRoundEnd();
     // (Bot Arena's spectator line has the keys already)
-    if (!this.cfg.arena) this.hud.message(t('hintKeysSpec'), this.time, 10);
+    if (!this.cfg.arena) this.tell(h, 'msg', 'hintKeysSpec', 10);
+    this.net?.rosterChanged();
   }
 
   createBots() {
@@ -435,6 +464,57 @@ export class Game {
     return b;
   }
 
+  // Online: a friend playing on the host's game from their own computer.
+  // pid: who they are in the online session; their keys arrive through
+  // nethost.js, and what's meant for their screen goes back there (tell).
+  // They start out watching until they're put in a team.
+  addRemote(pid, name) {
+    const p = new Player(this.newId(), name, false);
+    p.remote = pid;
+    p.ping = 0;
+    p.hacks = noHacks();
+    p.hackCfg = hackCfg(null);
+    p.guns = { primary: forTeam(settings.guns.primary, null), secondary: forTeam(settings.guns.secondary, null) };
+    p.spectator = true;
+    if (this.bm) this.bm.onJoin(p);
+    if (this.gg) this.gg.onJoin(p);
+    this.makeModel(p, 'T');
+    this.players.push(p);
+    return p;
+  }
+
+  // someone leaves the match (a friend going, a bot making room): what they
+  // carried falls where they stood
+  removePlayer(p) {
+    if (!this.players.includes(p)) return;
+    if (p.alive) {
+      this.dropOnDeath(p);
+      p.alive = false;
+    }
+    this.scene.remove(p.model.root);
+    p.model.dispose();
+    this.players = this.players.filter((o) => o !== p);
+    if (this.specTarget === p) this.specTarget = null;
+    if (this.deathCam && this.deathCam.killer === p) this.deathCam.killer = null;
+    if (this.roundBased()) this.checkRoundEnd();
+    this.net?.rosterChanged();
+  }
+
+  // a player number nobody has (online they travel as one byte)
+  newId() {
+    const used = new Set(this.players.map((p) => p.id));
+    let id = 1;
+    while (used.has(id)) id++;
+    return id;
+  }
+
+  // a bot name nobody in the match has yet
+  botName() {
+    const used = new Set(this.players.map((p) => p.name));
+    const free = BOT_NAMES.filter((n) => !used.has(n));
+    return free.length ? free[(Math.random() * free.length) | 0] : 'Bot ' + this.newId();
+  }
+
   // ---------- spawning ----------
   pickSpawn(p) {
     const list = this.ffa ? this.map.spawns.ffa : this.map.spawns[p.team];
@@ -495,8 +575,10 @@ export class Game {
         prim = weighted(BOT_PRIMARY, team);
         sec = weighted(BOT_PISTOL, team);
       } else {
-        prim = forTeam(settings.guns.primary, team);
-        sec = forTeam(settings.guns.secondary, team);
+        // a friend online picked theirs on their own computer
+        const guns = p.remote != null ? p.guns : settings.guns;
+        prim = forTeam(guns.primary, team);
+        sec = forTeam(guns.secondary, team);
       }
       if (prim) giveWeapon(p, prim);
       giveWeapon(p, sec);
@@ -515,14 +597,8 @@ export class Game {
     p.hasCorpse = false;
     p.model.deadT = 0;
     if (p.brain) p.brain.reset();
-    if (p === this.human) {
-      this.deathCam = null;
-      this.specTarget = null;
-      this.viewY = null;
-      this.flashFx = null;
-      if (!settings.guns.remember && !this.bm && !this.gg && !mapGuns) this.openGunMenu();
-      if (!this.roundBased()) this.hud.subPrint(t('spawnProtection'), this.time, SPAWN_PROTECT);
-    }
+    this.tell(p, 'spawned', p.spawnTime, p.yaw);
+    if (!this.roundBased()) this.tell(p, 'sub', 'spawnProtection', SPAWN_PROTECT);
   }
 
   // the map's own gun rules; Gun Game switches them off (it hands out the guns)
@@ -615,7 +691,8 @@ export class Game {
       team: h.team,
       money: () => h.money,
       price: (id) => priceOf(id),
-      onBuy: (id) => bm.buy(h, id),
+      // a friend online asks the host (which says why if it can't be bought)
+      onBuy: (id) => (this.client ? this.client.buy(id) : bm.buy(h, id)),
     });
   }
 
@@ -628,16 +705,22 @@ export class Game {
     return this.pendingGunMenu == null;
   }
 
-  applyGunChoice(life) {
-    const h = this.human;
+  // the guns chosen in the menu: now if still in the life it was opened for,
+  // else next spawn. p, guns: a friend's choice online (on the host's game)
+  applyGunChoice(life, p = this.human, guns = settings.guns) {
+    const h = p;
     if (!this.active || !h) return;
+    if (this.client) {
+      this.client.send({ t: 'guns', primary: guns.primary, secondary: guns.secondary, life });
+      return;
+    }
     const team = this.gunTeam(h);
-    const prim = forTeam(settings.guns.primary, team), sec = forTeam(settings.guns.secondary, team);
+    const prim = forTeam(guns.primary, team), sec = forTeam(guns.secondary, team);
     if (h.alive && life != null && h.spawnTime === life) {
       const w1 = h.weapons[1], w2 = h.weapons[2];
       if (!w1 || w1.id !== prim || !w2 || w2.id !== sec) this.giveLoadout(h, prim, sec);
     } else {
-      this.hud.message(t('gunsNextSpawn'), this.time, 4);
+      this.tell(h, 'msg', 'gunsNextSpawn', 4);
     }
   }
 
@@ -668,6 +751,7 @@ export class Game {
     this.map.resetBreakables();
     this.map.doors.reset();
     this.items.clear();
+    this.net?.newRound();
     if (this.mapRules().groundGuns) this.items.placeMapGuns();
     if (this.bm) this.bm.roundStart();
     for (const team of ['T', 'CT']) {
@@ -682,8 +766,8 @@ export class Game {
     }
     if (this.bm) this.bm.afterSpawn();
     if (this.recorder) this.recorder.roundStart();
-    this.hud.centerPrint(t('roundN', { n: r.n }), this.time, Math.max(1.5, this.freezeTime));
-    if (this.freezeTime > 0) this.hud.subPrint(t('freezeTime'), this.time, this.freezeTime);
+    this.tellAll('center', ['roundN', { n: r.n }], Math.max(1.5, this.freezeTime));
+    if (this.freezeTime > 0) this.tellAll('sub', 'freezeTime', this.freezeTime);
   }
 
   updateMode() {
@@ -697,15 +781,15 @@ export class Game {
       if (r.state === 'freeze' && this.time >= r.until) {
         r.state = 'live';
         r.endsAt = this.time + this.roundSeconds();
-        this.hud.centerPrint(t('goGoGo'), this.time, 1.5);
-        this.soundSys.play('round_start');
-        if (this.bm) radio.say(['Go go go!', 'Lock and load.', 'Let\'s go.', 'Move out.'][(Math.random() * 4) | 0]);
+        this.tellAll('center', 'goGoGo', 1.5);
+        this.globalSound('round_start');
+        if (this.bm) this.tellAll('say', ['Go go go!', 'Lock and load.', 'Let\'s go.', 'Move out.'][(Math.random() * 4) | 0]);
       } else if (r.state === 'live') {
         // once the bomb is down the clock no longer matters
         if (this.bm && this.bm.planted) this.checkRoundEnd();
         else if (this.time >= r.endsAt) {
           if (this.bm) {
-            this.hud.centerPrint(t('targetSaved'), this.time, ROUND_END_DELAY);
+            this.tellAll('center', 'targetSaved', ROUND_END_DELAY);
             this.endRound('CT', 'saved');
           } else this.endRound(null);
         } else this.checkRoundEnd();
@@ -744,7 +828,7 @@ export class Game {
     }
     this.teamScore = { T: this.teamScore.CT, CT: this.teamScore.T };
     if (this.bm) this.bm.lossStreak = { T: 0, CT: 0 };
-    this.hud.message(t('switchSides'), this.time, 5);
+    this.tellAll('msg', 'switchSides', 5);
   }
 
   // round length: Create Game's choice, else the mode's own
@@ -772,7 +856,8 @@ export class Game {
       this.makeModel(b, to);
       b.brain.reset();
       if (!roundStart) b.respawnAt = Math.max(b.respawnAt, this.time + 0.5);
-      this.hud.message(t('autoBalanced', { name: b.name, team: t(to === 'T' ? 'teamT' : 'teamCT') }), this.time, 5);
+      this.tellAll('msg', ['autoBalanced', { name: b.name, team: [to === 'T' ? 'teamT' : 'teamCT'] }], 5);
+      this.net?.rosterChanged();
     }
   }
 
@@ -805,20 +890,20 @@ export class Game {
       const w = winner && this.players.find((p) => p.team === winner && p.arenaSide != null);
       if (w) this.sideScore[w.arenaSide]++;
     }
-    const text = reason === 'bombed' ? t('targetBombed') : reason === 'defused' ? t('bombDefused') : reason === 'saved' ? t('targetSaved')
-      : winner === 'T' ? t('terroristsWin') : winner === 'CT' ? t('ctsWin') : t('roundDraw');
-    this.hud.centerPrint(text, this.time, ROUND_END_DELAY);
-    this.soundSys.play('round_start', { rate: 0.75 });
+    const text = reason === 'bombed' ? 'targetBombed' : reason === 'defused' ? 'bombDefused' : reason === 'saved' ? 'targetSaved'
+      : winner === 'T' ? 'terroristsWin' : winner === 'CT' ? 'ctsWin' : 'roundDraw';
+    this.tellAll('center', text, ROUND_END_DELAY);
+    this.globalSound('round_start', { rate: 0.75 });
     if (this.bm) {
       this.bm.rewards(winner, reason);
-      radio.say(winner === 'T' ? 'Terrorists win.' : winner === 'CT' ? 'Counter-Terrorists win.' : 'Round draw.');
+      this.tellAll('say', winner === 'T' ? 'Terrorists win.' : winner === 'CT' ? 'Counter-Terrorists win.' : 'Round draw.');
     }
   }
 
   // a round event: big centre text and the radio voice
   announce(key, speech) {
-    this.hud.centerPrint(t(key), this.time, 3);
-    radio.say(speech);
+    this.tellAll('center', key, 3);
+    this.tellAll('say', speech);
   }
 
   checkLimits() {
@@ -832,23 +917,33 @@ export class Game {
 
   endMatch() {
     this.over = true;
+    // the title as a message, so friends online read it in their language
     let title;
     if (this.gg) {
       title = this.gg.matchTitle();
     } else if (this.mode === 'ffa') {
-      const best = [...this.players].sort((a, b) => b.score - a.score || a.deaths - b.deaths)[0];
-      title = t('playerWins', { name: best.name });
+      const best = [...this.players].filter((p) => !p.spectator).sort((a, b) => b.score - a.score || a.deaths - b.deaths)[0];
+      title = best ? ['playerWins', { name: best.name }] : 'draw';
     } else if (this.teamScore.T === this.teamScore.CT) {
-      title = t('draw');
+      title = 'draw';
     } else {
-      title = t('teamWins', { team: t(this.teamScore.T > this.teamScore.CT ? 'teamT' : 'teamCT') });
+      title = ['teamWins', { team: [this.teamScore.T > this.teamScore.CT ? 'teamT' : 'teamCT'] }];
     }
-    this.hooks.onMatchEnd(title, this.scoreboardHtml());
+    this.net?.matchOver(title);
+    this.hooks.onMatchEnd(tmsg(title), this.scoreboardHtml());
   }
 
   // ---------- main tick ----------
   tick(dt) {
-    if (!this.active || this.needsTeam()) return;
+    if (!this.active) return;
+    // a friend online: the host's match, as it comes in
+    if (this.client) {
+      this.client.tick(dt);
+      this.input.endTick();
+      return;
+    }
+    // (hosting, the match goes on for the friends whatever we do)
+    if (this.needsTeam() && !this.net) return;
     if (this.replay) {
       this.replay.tick(dt);
       this.input.endTick();
@@ -868,57 +963,88 @@ export class Game {
     const alive = this.players.filter((p) => p.alive);
     for (const p of this.players) {
       if (!p.alive) continue;
-      const cmd = p.isBot ? p.brain.think(dt) : this.humanCmd();
-      if (p.hacking) hackCmd(this, p, cmd, dt);
-      if (frozen) {
-        cmd.forward = cmd.side = 0;
-        cmd.jump = cmd.attack = cmd.attack2 = false;
+      if (p.remote != null) {
+        // A friend's keys, one tick's worth each, as they arrive from their
+        // computer (nethost.js): none yet, and they wait where they are; a
+        // pile-up runs a few at once. Each comes with where they looked.
+        for (const cmd of this.net.cmdsFor(p)) {
+          if (!p.alive) break;
+          p.yaw = cmd.yaw;
+          p.pitch = cmd.pitch;
+          this.playerTick(p, cmd, dt, alive, frozen);
+        }
+        continue;
       }
-      // defusing: you stay put and keep your hands on the bomb
-      if (p.defusing) {
-        cmd.forward = cmd.side = 0;
-        cmd.jump = cmd.attack = cmd.attack2 = false;
-        cmd.slot = 0;
-        p.vel.x = p.vel.z = 0;
-      }
-      if (cmd.slot) selectSlot(this, p, cmd.slot);
-      if (cmd.cycleNade) cycleGrenade(this, p);
-      if (p.velMod < 1) {
-        p.vel.x *= p.velMod;
-        p.vel.z *= p.velMod;
-        p.velMod = Math.min(1, p.velMod + 0.01);
-      }
-      const others = this.othersBuf;
-      others.length = 0;
-      for (const o of alive) if (o !== p && o.alive) others.push(o);
-      p.prevPos.copy(p.pos);
-      // speedhack: their movement runs faster than the clock
-      playerMove(p, cmd, this.world, others, p.hacks.speedhack ? dt * p.hackCfg.speed : dt);
-      if (p.moveEvents.landed > PM.maxSafeFallSpeed) this.fallDamage(p, p.moveEvents.landed);
-      if (!p.alive) continue;
-      if (cmd.attack && p.spawnProtectUntil > this.time && this.time - p.spawnTime > 0.3) p.spawnProtectUntil = this.time;
-      weaponTick(this, p, cmd);
-      if (!p.alive) continue;
-      if (p.hacks.norecoil) p.punchPitch = p.punchYaw = 0;
-      this.useTick(p, cmd);
-      this.items.playerTick(p, cmd);
-      if (this.bm) this.bm.playerTick(p, cmd);
-      this.stepSounds(p, dt);
-      // DropPunchAngle
-      const len = Math.hypot(p.punchPitch, p.punchYaw);
-      if (len > 0) {
-        const nl = Math.max(0, len - (10 + len * 0.5) * dt);
-        p.punchPitch *= nl / len;
-        p.punchYaw *= nl / len;
-      }
-      if (p.pos.y < (this.map.def.killY ?? -300)) this.killPlayer(p, null, 'world', false);
+      this.playerTick(p, p.isBot ? p.brain.think(dt) : this.humanCmd(), dt, alive, frozen);
     }
     this.grenades.tick(dt);
     this.items.tick(dt);
     this.map.doors.update(dt, this);
     if (this.bm) this.bm.tick(dt);
     if (this.recorder) this.recorder.tick(dt);
+    if (this.net) this.net.tick(dt);
     this.input.endTick();
+  }
+
+  // one player's tick with their keys: move, shoot, use, pick up
+  playerTick(p, cmd, dt, alive, frozen) {
+    if (p.hacking) hackCmd(this, p, cmd, dt);
+    this.holdStill(p, cmd, frozen);
+    if (cmd.slot) selectSlot(this, p, cmd.slot);
+    if (cmd.cycleNade) cycleGrenade(this, p);
+    const others = this.othersBuf;
+    others.length = 0;
+    for (const o of alive) if (o !== p && o.alive) others.push(o);
+    p.prevPos.copy(p.pos);
+    this.move(p, cmd, others, dt);
+    if (p.moveEvents.landed > PM.maxSafeFallSpeed) this.fallDamage(p, p.moveEvents.landed);
+    if (!p.alive) return;
+    if (cmd.attack && p.spawnProtectUntil > this.time && this.time - p.spawnTime > 0.3) p.spawnProtectUntil = this.time;
+    // a friend shoots at what their screen showed a moment ago (nethost.js)
+    if (p.remote != null) this.net.lagComp(p, cmd, () => weaponTick(this, p, cmd));
+    else weaponTick(this, p, cmd);
+    if (!p.alive) return;
+    if (p.hacks.norecoil) p.punchPitch = p.punchYaw = 0;
+    this.useTick(p, cmd);
+    this.items.playerTick(p, cmd);
+    if (this.bm) this.bm.playerTick(p, cmd);
+    this.stepSounds(p, dt);
+    // DropPunchAngle
+    const len = Math.hypot(p.punchPitch, p.punchYaw);
+    if (len > 0) {
+      const nl = Math.max(0, len - (10 + len * 0.5) * dt);
+      p.punchPitch *= nl / len;
+      p.punchYaw *= nl / len;
+    }
+    if (p.pos.y < (this.map.def.killY ?? -300)) this.killPlayer(p, null, 'world', false);
+  }
+
+  // freeze time and defusing keep a player where they are (defusing: hands
+  // on the bomb)
+  holdStill(p, cmd, frozen) {
+    if (frozen) {
+      cmd.forward = cmd.side = 0;
+      cmd.jump = cmd.attack = cmd.attack2 = false;
+    }
+    if (p.defusing) {
+      cmd.forward = cmd.side = 0;
+      cmd.jump = cmd.attack = cmd.attack2 = false;
+      cmd.slot = 0;
+      p.vel.x = p.vel.z = 0;
+    }
+  }
+
+  // one tick of a player's movement (a friend's game online runs this too
+  // for their own player, so they move at once: netclient.js)
+  move(p, cmd, others, dt) {
+    // slowed down by being hit
+    if (p.velMod < 1) {
+      p.vel.x *= p.velMod;
+      p.vel.z *= p.velMod;
+      p.velMod = Math.min(1, p.velMod + 0.01);
+    }
+    // speedhack: their movement runs faster than the clock
+    playerMove(p, cmd, this.world, others, p.hacks.speedhack ? dt * p.hackCfg.speed : dt);
   }
 
   // E: defuse the bomb, else open / close a door, else swap for the gun we look at
@@ -981,11 +1107,10 @@ export class Game {
           case 'drop':
             if (this.items.enabled) this.pendingDrop = true;
             break;
-          case 'autobuy':
-            if (this.bm && h.alive) this.bm.autobuy(h);
-            break;
-          case 'rebuy':
-            if (this.bm && h.alive) this.bm.rebuy(h);
+          case 'autobuy': case 'rebuy':
+            if (!this.bm || !h.alive) break;
+            if (this.client) this.client.send({ t: a });
+            else this.bm[a](h);
             break;
           case 'slot4':
             // pressing it again cycles through the grenade types
@@ -1070,13 +1195,12 @@ export class Game {
     p.health -= dmg;
     p.punchPitch -= Math.min(10, speed * 0.013);
     this.sound('fallpain', p, 1);
-    if (p === this.human) this.hud.hurtFlash();
+    this.tell(p, 'hurt');
     if (p.health <= 0) this.killPlayer(p, null, 'world', false);
   }
 
   stepSounds(p, dt) {
     const ev = p.moveEvents;
-    const me = p === this.human;
     const wet = p.waterDepth > 4;
     if (wet && !p.wasWet && p.vel.y < -120) this.splash(p.pos.x, p.pos.y + p.waterDepth, p.pos.z, 1.4);
     p.wasWet = wet;
@@ -1084,14 +1208,14 @@ export class Game {
       this.sound(wet ? 'wade' : 'land', p, Math.min(1, ev.landed / 600));
       this.noise(p, 700);
     }
-    if (ev.jumped) this.sound(wet ? 'wade' : this.stepSound(p), p, me ? 0.35 : 0.8);
+    if (ev.jumped) this.sound(wet ? 'wade' : this.stepSound(p), p, 0.8, 0, 200, 0.35);
     if (ev.ladder) {
       // hands and feet on the rungs
       if (Math.abs(p.vel.y) > 50) {
         p.stepAccum += dt;
         if (p.stepAccum >= 0.38) {
           p.stepAccum = 0;
-          this.sound('ladder', p, me ? 0.4 : 0.9, 0, 110);
+          this.sound('ladder', p, 0.9, 0, 110, 0.4);
           this.noise(p, 800);
         }
       }
@@ -1104,9 +1228,9 @@ export class Game {
         p.stepAccum = 0;
         if (wet) {
           // wading: splashes you can hear even when walking
-          this.sound('wade', p, me ? 0.4 : 0.9, 0, 120);
+          this.sound('wade', p, 0.9, 0, 120, 0.4);
           this.splash(p.pos.x, p.pos.y + p.waterDepth, p.pos.z, 0.5);
-        } else this.sound(this.stepSound(p), p, me ? 0.32 : 0.9, 0, 110);
+        } else this.sound(this.stepSound(p), p, 0.9, 0, 110, 0.32);
         this.noise(p, 900);
       }
     } else {
@@ -1147,21 +1271,119 @@ export class Game {
     }
   }
 
+  // ---------- whose screen ----------
+  // Online, the host's game runs everyone. What's meant for one player's
+  // screen (a message, the red flash of a hit, the death camera) is shown
+  // here when they're us, goes to their own game when they're a friend
+  // (nethost.js), and is dropped for bots. Text travels as a message (tmsg)
+  // so everyone reads it in their own language.
+  tell(p, kind, ...args) {
+    if (!p) return;
+    if (p === this.human) this.show(kind, ...args);
+    else if (p.remote != null && this.net) this.net.tell(p, kind, args);
+  }
+
+  // the same, for everyone's screen
+  tellAll(kind, ...args) {
+    this.show(kind, ...args);
+    if (this.net) this.net.tellAll(kind, args);
+  }
+
+  // what each kind of tell does on this screen
+  show(kind, ...a) {
+    const h = this.human, hud = this.hud, now = this.time;
+    if (!h) return;
+    switch (kind) {
+      case 'center': hud.centerPrint(tmsg(a[0]), now, a[1]); break;
+      case 'sub': hud.subPrint(tmsg(a[0]), now, a[1]); break;
+      case 'msg': hud.message(tmsg(a[0]), now, a[1]); break;
+      case 'hack': hud.hackMessage(tmsg(a[0]), now); break;
+      case 'say': radio.say(a[0]); break;            // the round announcer's voice
+      case 'sound': this.soundSys.play(a[0], a[1]); break;
+      case 'money': hud.moneyChange(a[0]); break;
+      case 'hurt': hud.hurtFlash(); break;
+      case 'damage': hud.damage(a[0]); break;
+      case 'killed': {
+        // we killed someone: "You killed X" and the kill sound
+        const v = this.byId(a[0]);
+        if (v) hud.killNotice(v, a[1], now);
+        this.soundSys.play(a[1] ? 'kill_hs' : 'kill', { volume: 0.7 });
+        break;
+      }
+      case 'died': {
+        // the death camera turns to the killer (a[1], the gun: none for a team change)
+        const killer = this.byId(a[0]);
+        this.radio.closeMenu();
+        h.diedAt = now;
+        this.deathCam = { pos: h.pos.clone(), yaw: h.yaw, pitch: h.pitch, killer, start: now };
+        if (a[1] == null) break;
+        if (killer) hud.subPrint(t(a[2] ? 'killedByHs' : 'killedBy', { killer: killer.name, weapon: weaponName(a[1]) }), now, 4);
+        else hud.subPrint(t('suicide'), now, 3);
+        break;
+      }
+      case 'spawned':
+        // a new life (a[0]: when it started, a[1]: where the spawn faces)
+        h.spawnTime = a[0];
+        h.yaw = a[1];
+        h.pitch = 0;
+        this.deathCam = null;
+        this.specTarget = null;
+        this.viewY = null;
+        this.flashFx = null;
+        if (!settings.guns.remember && !this.bm && !this.gg && !this.mapGuns()) this.openGunMenu();
+        break;
+      case 'watch':
+        // on the Spectator team now
+        this.deathCam = null;
+        this.specTarget = null;
+        this.radio.closeMenu();
+        break;
+      case 'ggUp':
+        // Gun Game: up a level (a[0]: the knife level)
+        if (this.gg) this.gg.upAt = now;
+        this.soundSys.play('levelup', { volume: 0.6 });
+        if (a[0]) hud.subPrint(t('ggKnifeLevel'), now, 3);
+        break;
+    }
+  }
+
+  byId(id) {
+    return this.players.find((p) => p.id === id) || null;
+  }
+
   // ---------- services used by weapons.js and grenades.js ----------
   later(delay, fn) {
     this.timers.push({ at: this.time + delay, fn });
   }
 
-  sound(name, p, volume = 1, delay = 0, ref = 200) {
-    if (p === this.human || !p) this.soundSys.play(name, { volume, delay });
+  // A sound a player makes: whoever is that player hears it as their own
+  // (no direction, at ownVolume), everyone else from where they are.
+  sound(name, p, volume = 1, delay = 0, ref = 200, ownVolume = volume) {
+    if (this.net) this.net.sound(name, p, volume, delay, ref, ownVolume);
+    this.playerSound(name, p, volume, delay, ref, ownVolume);
+  }
+
+  playerSound(name, p, volume, delay, ref, ownVolume) {
+    if (p === this.human || !p) this.soundSys.play(name, { volume: p ? ownVolume : volume, delay });
     else this.soundSys.play(name, { volume, delay, ref, pos: { x: p.pos.x, y: p.pos.y + 40, z: p.pos.z } });
   }
 
   weaponSound(p, name, silenced) {
+    if (this.net) this.net.weaponSound(p, name, silenced);
+    this.gunSound(p, name, silenced);
+    this.noise(p, silenced ? 500 : 2800);
+  }
+
+  gunSound(p, name, silenced) {
     const reverb = silenced ? 0.05 : 0.22;
     if (p === this.human) this.soundSys.play(name, { volume: 0.85, rate: 0.97 + Math.random() * 0.06, reverb });
     else this.soundSys.play(name, { volume: 1, rate: 0.97 + Math.random() * 0.06, reverb, ref: silenced ? 150 : 450, pos: { x: p.pos.x, y: p.pos.y + 50, z: p.pos.z } });
-    this.noise(p, silenced ? 500 : 2800);
+  }
+
+  // a sound everyone hears the same, from nowhere in particular (a round starting)
+  globalSound(name, opts = {}) {
+    if (this.net) this.net.globalSound(name, opts);
+    this.soundSys.play(name, opts);
   }
 
   noise(src, radius) {
@@ -1178,6 +1400,7 @@ export class Game {
 
   weaponEvent(p, type, arg) {
     if (this.recorder) this.recorder.weapon(p, type, arg);
+    if (this.net) this.net.weaponEvent(p, type, arg);
     if (p === this.pov) {
       this.viewModel.play(type, this.time, arg);
       if (type === 'fire') this.hud.crossShot(CROSS[p.weapon.id]?.[1] ?? 3);
@@ -1266,7 +1489,7 @@ export class Game {
   }
 
   weaponMessage(p, key) {
-    if (p === this.human) this.hud.message(t(key), this.time, 3);
+    this.tell(p, 'msg', key, 3);
   }
 
   eye(p, out) {
@@ -1285,12 +1508,17 @@ export class Game {
     if (this.recorder) this.recorder.blind(p, hold, fade, alpha);
     if (hold + fade < 0.05 || p.hacks.noflash) return;
     const now = this.time;
-    if (p === this.human) {
-      const cur = this.flashFx;
-      const left = cur ? this.flashAlpha() * (Math.max(0, cur.start + cur.hold - now) + cur.fade / 2) : 0;
-      if (alpha * (hold + fade / 2) >= left) this.flashFx = { start: now, hold, fade, alpha };
-    }
+    if (p === this.human) this.whiteOut(hold, fade, alpha);
+    // (everyone online gets it: whoever watches them in first person sees it too)
+    if (this.net) this.net.blind(p, hold, fade, alpha);
     if (p.brain) p.brain.onBlind(now + hold + fade * (alpha >= 1 ? 0.5 : 0.25));
+  }
+
+  // the flashbang's white on our screen (a weaker one doesn't cut a strong one short)
+  whiteOut(hold, fade, alpha) {
+    const now = this.time, cur = this.flashFx;
+    const left = cur ? this.flashAlpha() * (Math.max(0, cur.start + cur.hold - now) + cur.fade / 2) : 0;
+    if (alpha * (hold + fade / 2) >= left) this.flashFx = { start: now, hold, fade, alpha };
   }
 
   flashAlpha() {
@@ -1309,6 +1537,7 @@ export class Game {
   // screen shake for the human near an explosion
   shake(pos, radius) {
     const h = this.human;
+    if (this.net) this.net.shake(pos, radius);
     if (!h) return;
     const d = this.camera.position.distanceTo(pos);
     const k = 1 - d / radius;
@@ -1409,6 +1638,7 @@ export class Game {
   // a streak from the gun to where the bullet stopped
   bulletTracer(p, end) {
     if (this.recorder) this.recorder.shot(p, end);
+    if (this.net) this.net.shot(p, end);
     if (!settings.tracers || this.headless) return;
     const from = v4;
     if (p === this.pov) {
@@ -1422,7 +1652,9 @@ export class Game {
     this.effects.tracer(from, end);
   }
 
+  // a sound from a place in the world
   soundAt(name, pos, volume, ref, reverb = 0) {
+    if (this.net) this.net.soundAt(name, pos, volume, ref, reverb);
     this.soundSys.play(name, { volume, ref, pos, reverb });
   }
 
@@ -1438,6 +1670,7 @@ export class Game {
 
   breakBox(box, dir) {
     if (this.recorder) this.recorder.brk(box, dir);
+    if (this.net) this.net.brk(box, dir);
     box.off = true;
     if (box.piece) box.piece.mesh.visible = false;
     const kind = box.mat === 'glass' ? 'glass' : box.mat === 'grate' ? 'metal' : 'wood';
@@ -1532,14 +1765,15 @@ export class Game {
     victim.lastFightAt = this.time;
     this.effects.blood(point, dir, group === 'head' ? 1.4 : 1);
     victim.model.flinch(dir, victim.yaw, group === 'head');
+    if (this.net) this.net.flinch(victim, dir, group === 'head');
     if (helmetHit) this.soundAt('hit_helmet', point, 0.9, 250);
     else this.soundAt('hit_flesh', point, 0.8, 160);
     if (victim.brain) victim.brain.onDamaged(attacker);
-    if (victim === this.human && attacker && attacker !== victim) {
+    if (attacker && attacker !== victim && !victim.isBot) {
       const dx = attacker.pos.x - victim.pos.x, dz = attacker.pos.z - victim.pos.z;
       const rel = wrap(Math.atan2(-dx, -dz) - victim.yaw);
       const side = Math.abs(rel) < Math.PI / 4 ? 'front' : Math.abs(rel) > (Math.PI * 3) / 4 ? 'back' : rel > 0 ? 'left' : 'right';
-      this.hud.damage(side);
+      this.tell(victim, 'damage', side);
     }
     if (victim.health <= 0) this.killPlayer(victim, attacker, def.id, group === 'head', dir);
   }
@@ -1547,6 +1781,7 @@ export class Game {
   killPlayer(victim, attacker, weaponId, headshot, dir) {
     if (!victim.alive) return;
     if (this.recorder) this.recorder.kill(victim, attacker, weaponId, headshot, dir);
+    if (this.net) this.net.kill(victim, attacker, weaponId, headshot, dir, !!attacker && attacker !== victim && attacker.hacking);
     // a grenade with its pin pulled drops live, like in 1.6
     const held = victim.weapon;
     if (held && held.def.type === 'grenade' && held.pin) this.throwGrenade(victim, held.id, victim.yaw, -1.2, 40);
@@ -1578,10 +1813,7 @@ export class Game {
     if (this.gg) this.gg.onKill(attacker, victim, weaponId);
     this.dropOnDeath(victim);
     this.hud.kill({ killer: attacker, victim, weapon: weaponId, headshot, hack: hackKill }, this.time, this.human);
-    if (attacker === this.human && enemyKill) {
-      this.hud.killNotice(victim, headshot, this.time);
-      this.sound(headshot ? 'kill_hs' : 'kill', this.human, 0.7);
-    }
+    if (enemyKill) this.tell(attacker, 'killed', victim.id, headshot);
     // fall away from the shot
     if (dir) {
       const fx = -Math.sin(victim.yaw), fz = -Math.cos(victim.yaw);
@@ -1591,13 +1823,7 @@ export class Game {
     this.sound('death', victim, 0.8);
     if (victim.brain) victim.brain.reset();
     victim.model.setGlow(0);
-    if (victim === this.human) {
-      this.radio.closeMenu();
-      this.deathCam = { pos: victim.pos.clone(), yaw: victim.yaw, pitch: victim.pitch, killer: attacker, start: this.time };
-      if (attacker && attacker !== victim) {
-        this.hud.subPrint(t(headshot ? 'killedByHs' : 'killedBy', { killer: attacker.name, weapon: weaponName(weaponId) }), this.time, 4);
-      } else this.hud.subPrint(t('suicide'), this.time, 3);
-    }
+    this.tell(victim, 'died', attacker && attacker !== victim ? attacker.id : -1, weaponId, headshot);
     if (this.roundBased()) this.checkRoundEnd();
     else {
       victim.respawnAt = this.time + RESPAWN_DELAY + (victim.isBot ? Math.random() * 0.8 : 0);
@@ -1760,6 +1986,7 @@ export class Game {
     p.hacks[key] = on;
     p.hacking = isHacking(p);
     if (!on && key === 'triggerbot') p.trigSince = 0;
+    if (this.net) this.net.hacksChanged(p);
     return true;
   }
 
@@ -1778,9 +2005,10 @@ export class Game {
       p.hackNews = null;
       const on = HACKS.filter((k) => p.hacks[k] && !n.before[k]);
       const off = HACKS.filter((k) => !p.hacks[k] && n.before[k]);
-      const list = (ks) => (ks.length === HACKS.length ? t('allHacks') : ks.map((k) => t('hack_' + k)).join(', '));
-      if (on.length) this.hud.hackMessage(t('hackOn', { name: p.name, list: list(on) }), this.time);
-      if (off.length) this.hud.hackMessage(t('hackOff', { name: p.name, list: list(off) }), this.time);
+      // (a list of messages: everyone online reads it in their own language)
+      const list = (ks) => (ks.length === HACKS.length ? ['allHacks'] : ks.map((k) => ['hack_' + k]));
+      if (on.length) this.tellAll('hack', ['hackOn', { name: p.name, list: list(on) }]);
+      if (off.length) this.tellAll('hack', ['hackOff', { name: p.name, list: list(off) }]);
     }
   }
 
@@ -1881,6 +2109,51 @@ export class Game {
     this.hud.centerPrint(title, this.time, 3);
   }
 
+  // ---------- online, a friend's game ----------
+  // The host's match shown here: netclient.js makes the players and moves
+  // them as the host says; our keys go to the host. client: the NetClient
+  // (its cfg is the host's match settings).
+  startClient(client) {
+    this.stop();
+    const cfg = client.cfg;
+    this.cfg = cfg;
+    this.mode = cfg.mode;
+    this.ffa = cfg.mode === 'ffa' || (cfg.mode === 'gungame' && !cfg.ggTeams);
+    this.time = 0;
+    this.over = false;
+    this.teamScore = { T: 0, CT: 0 };
+    this.matchEndsAt = Infinity;
+    this.freezeTime = cfg.freezeTime ?? FREEZE_TIME;
+    this.round = { n: 0, state: 'wait', until: 0, endsAt: 0 };
+    this.botsCreated = true;
+    this.director = false;
+    this.statsPanel = false;
+    this.specMode = 'chase';
+    this.freeCam = null;
+    this.shotLines = [];
+    this.deathMarks = [];
+    this.watchSpeed = 1;
+    this.stats = null;
+    this.sideScore = [0, 0];
+    this.swapped = false;
+    // the bomb and Gun Game only keep what the host tells about them here
+    this.bm = this.mode === 'bomb' ? new BombMode(this) : null;
+    this.gg = this.mode === 'gungame' ? new GunGame(this) : null;
+    this.map.resetBreakables();
+    this.map.doors.reset();
+    this.items.clear();
+    this.items.enabled = !!this.bm || !!this.mapRules().drops;
+    this.players = [];
+    this.human = null;
+    this.active = true;
+    this.radio.reset();
+    this.effects.clear();
+    this.hud.clearFeed();
+    this.hud.setVisible(true);
+    this.client = client;
+    client.attach(this);
+  }
+
   // ---------- Bot Arena ----------
   // How the match went: who won (a side, or the order in free-for-all) and
   // what each character did.
@@ -1908,13 +2181,13 @@ export class Game {
     const hk = !!this.cfg.hacks;
     const hackTag = (p) => (p.hacking ? ` <em class="hk">${escapeHtml(t('hackTag'))}</em>` : '');
     const hkCell = (p) => (hk ? `<td class="${p.hackKills ? 'hk' : ''}">${p.hackKills}</td>` : '');
-    const row = (p) => `<tr class="${p === this.human ? 'me' : ''}${p.alive ? '' : ' dead'}"><td>${escapeHtml(p.name)}${hackTag(p)}${p.alive ? '' : ` <em>${t('dead')}</em>`}${bombTag(p)}</td>${lvCell(p)}<td>${p.score}</td><td>${p.deaths}</td>${hkCell(p)}<td>${p.isBot ? 'BOT' : '0'}</td></tr>`;
+    const row = (p) => `<tr class="${p === this.human ? 'me' : ''}${p.alive ? '' : ' dead'}"><td>${escapeHtml(p.name)}${hackTag(p)}${p.alive ? '' : ` <em>${t('dead')}</em>`}${bombTag(p)}</td>${lvCell(p)}<td>${p.score}</td><td>${p.deaths}</td>${hkCell(p)}<td>${p.isBot ? 'BOT' : Math.round(p.ping || 0)}</td></tr>`;
     const head = `<tr><th>${t('name')}</th>${gg ? `<th>${t('ggLevelCol')}</th>` : ''}<th>${t('score')}</th><th>${t('deaths')}</th>${hk ? `<th>${t('hackKillsCol')}</th>` : ''}<th>${t('latency')}</th></tr>`;
     const sort = gg ? GunGame.sort : (a, b) => b.score - a.score || a.deaths - b.deaths;
     const modeName = t('mode_' + this.mode) + (gg ? ` · ${t(this.ffa ? 'ggFfa' : 'ggTeams')}` : '');
     let html = `<div class="sb-title">${escapeHtml(this.map.name)} — ${escapeHtml(modeName)}</div>`;
     if (this.ffa) {
-      const ps = [...this.players].sort(sort);
+      const ps = this.players.filter((p) => !p.spectator).sort(sort);
       html += `<div class="sb-team ffa"><div class="sb-head"><span>${t('players')}</span><span>${t('playersCount', { n: ps.length })}</span></div><table>${head}${ps.map(row).join('')}</table></div>`;
     } else {
       for (const team of ['CT', 'T']) {
@@ -1922,7 +2195,8 @@ export class Game {
         html += `<div class="sb-team ${team.toLowerCase()}"><div class="sb-head"><span>${t(team === 'T' ? 'teamT' : 'teamCT')}</span><span class="sb-score">${gg ? '' : this.teamScore[team]}</span><span>${t('playersCount', { n: ps.length })}</span></div><table>${head}${ps.map(row).join('')}</table></div>`;
       }
     }
-    if (this.human.spectator) html += `<div class="sb-spec">${t('spectators')}: ${escapeHtml(this.human.name)}</div>`;
+    const specs = this.players.filter((p) => p.spectator);
+    if (specs.length) html += `<div class="sb-spec">${t('spectators')}: ${specs.map((p) => escapeHtml(p.name)).join(', ')}</div>`;
     return html;
   }
 
@@ -2001,7 +2275,8 @@ export class Game {
     // no smoke: clouds are only a faint haze
     this.grenades.seeThrough = vh.nosmoke;
     this.grenades.render(dt, alpha);
-    this.items.render(dt);
+    // (a friend's game online gets the guns' turning from the host)
+    if (!this.client) this.items.render(dt);
     if (this.bm) {
       this.bm.render();
       // the buy menu closes when you leave the buy zone or buy time runs out

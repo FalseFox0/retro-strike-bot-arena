@@ -139,15 +139,20 @@ export class UI {
     const items = [];
     // watching a Bot Arena match: back to Bot Arena instead of disconnecting
     const watching = this.inGame && this.on.arenaWatching();
+    // online: the host ends the match for everyone, a friend goes back to the lobby
+    const online = this.inGame ? this.on.onlineRole() : null;
     if (this.inGame) {
       items.push(item(t('resume'), () => this.on.resume()));
-      items.push(item(watching ? t('arenaBack') : t('disconnect'), () => this.on.disconnect()));
+      const leave = watching ? 'arenaBack' : online === 'host' ? 'onlEndMatch' : online === 'client' ? 'onlToLobby' : 'disconnect';
+      items.push(item(t(leave), () => this.on.disconnect()));
       if (!watching) {
         items.push(h('div', { class: 'mm-gap' }));
+        if (online) items.push(item(t('onlLobby'), () => this.on.online()));
         items.push(item(t('hacks'), () => this.showHacks()));
       }
     }
-    if (!watching) items.push(item(t('newGame'), () => this.showCreate()));
+    if (!watching && !online) items.push(item(t('newGame'), () => this.showCreate()));
+    if (!this.inGame) items.push(item(t('playOnline'), () => this.on.online()));
     if (!this.inGame) items.push(item(t('botArena'), () => this.on.arena()));
     items.push(item(t('options'), () => this.showOptions()));
     return h('div', { class: 'main-menu' + (this.inGame ? ' ingame' : '') },
@@ -156,7 +161,7 @@ export class UI {
         h('div', { class: 'logo-sub' }, 'BOT ARENA'),
         h('div', { class: 'logo-note' }, t('subtitle'))),
       h('div', { class: 'mm-items' }, items),
-      this.inGame ? h('div', { class: 'mm-paused' }, settings.pauseInMenu ? t('paused') : '') : null,
+      this.inGame ? h('div', { class: 'mm-paused' }, settings.pauseInMenu && !online ? t('paused') : '') : null,
     );
   }
 
@@ -217,16 +222,22 @@ export class UI {
     ], 'w-create');
   }
 
-  // Game tab: map, mode, bots, limits
-  createMain() {
-    const m = settings.match;
+  // Game tab: map, mode, bots, limits. online: the online lobby's settings,
+  // where bots fill the places no human takes (m.fill a team, or in all)
+  createMain(m = settings.match, online = false) {
     const save = () => saveSettings();
     const botsRow = h('div');
     // team modes have T and CT bots, free-for-all a single count
     const fillBots = () => {
       botsRow.innerHTML = '';
       const counts = (n) => Array.from({ length: n + 1 }, (_, i) => [i, String(i)]);
-      if (hasTeams(m)) {
+      if (online) {
+        const team = hasTeams(m), max = team ? 5 : 10;
+        if (m.fill > max) m.fill = max;
+        const opts = Array.from({ length: max - (team ? 0 : 1) }, (_, i) => i + (team ? 1 : 2)).map((n) => [n, team ? `${n} v ${n}` : String(n)]);
+        botsRow.append(this.row(t(team ? 'onlFillTeam' : 'onlFillAll'), this.select(m.fill, opts, (v) => { m.fill = +v; save(); })),
+          h('div', { class: 'vgui-desc' }, t('onlFillDesc')));
+      } else if (hasTeams(m)) {
         botsRow.append(
           this.row(t('botsT'), this.select(m.botsT, counts(MAX_TEAM_BOTS), (v) => { m.botsT = +v; save(); })),
           this.row(t('botsCT'), this.select(m.botsCT, counts(MAX_TEAM_BOTS), (v) => { m.botsCT = +v; save(); })));
@@ -290,15 +301,15 @@ export class UI {
         desc,
         botsRow,
         this.row(t('botDifficulty'), this.select(m.difficulty, ['easy', 'normal', 'hard', 'expert'].map((d) => [d, t('diff_' + d)]), (v) => { m.difficulty = v; save(); })),
-        this.charsRow(),
+        this.charsRow(m),
         limitRow,
         timeRow,
       ));
   }
 
   // Bot Arena characters can take the bot slots (nothing they do here counts in the save)
-  charsRow() {
-    const m = settings.match, bc = m.botChars;
+  charsRow(m = settings.match) {
+    const bc = m.botChars;
     const saves = this.on.arenaSaves();
     const cur = saves.find((x) => x.id === bc.save);
     const rows = [this.row(t('botPlayers'), this.select(cur ? cur.id : '', [['', t('botPlayersPlain')], ...saves.map((x) => [x.id, t('botPlayersSave', { name: x.name })])], (v) => {
@@ -321,8 +332,7 @@ export class UI {
   }
 
   // Advanced tab: only what applies to the chosen mode
-  createAdvanced() {
-    const m = settings.match;
+  createAdvanced(m = settings.match) {
     const save = () => saveSettings();
     const rows = [];
     const rounds = m.mode === 'classic' || m.mode === 'bomb';
@@ -350,8 +360,8 @@ export class UI {
   }
 
   // Hacks tab: may players hack, and which bots hack with what
-  createHacks() {
-    const m = settings.match;
+  // (online: up to the number of places bots may fill)
+  createHacks(m = settings.match, online = false) {
     const save = () => saveSettings();
     const rows = [
       this.check(t('hacksAllowed'), m.hacks, (v) => { m.hacks = v; save(); this.renderAll(); }),
@@ -361,12 +371,13 @@ export class UI {
       rows.push(h('div', { class: 'vgui-desc hk-off' }, t('hacksAllowFirst')));
     } else {
       const counts = (n) => Array.from({ length: n + 1 }, (_, i) => [i, String(i)]);
+      const maxT = online ? m.fill : m.botsT, maxCT = online ? m.fill : m.botsCT, maxN = online ? m.fill : m.bots;
       if (hasTeams(m)) {
         rows.push(
-          this.row(t('hackBotsT'), this.select(Math.min(m.hackBotsT, m.botsT), counts(m.botsT), (v) => { m.hackBotsT = +v; save(); })),
-          this.row(t('hackBotsCT'), this.select(Math.min(m.hackBotsCT, m.botsCT), counts(m.botsCT), (v) => { m.hackBotsCT = +v; save(); })));
+          this.row(t('hackBotsT'), this.select(Math.min(m.hackBotsT, maxT), counts(maxT), (v) => { m.hackBotsT = +v; save(); })),
+          this.row(t('hackBotsCT'), this.select(Math.min(m.hackBotsCT, maxCT), counts(maxCT), (v) => { m.hackBotsCT = +v; save(); })));
       } else {
-        rows.push(this.row(t('hackBotsN'), this.select(Math.min(m.hackBots, m.bots), counts(m.bots), (v) => { m.hackBots = +v; save(); })));
+        rows.push(this.row(t('hackBotsN'), this.select(Math.min(m.hackBots, maxN), counts(maxN), (v) => { m.hackBots = +v; save(); })));
       }
       rows.push(h('div', { class: 'hk-sub' }, t('botHacksTitle')));
       rows.push(h('div', { class: 'hk-grid' }, HACKS.map((k) => this.check(t('hack_' + k), m.botHacks[k], (v) => { m.botHacks[k] = v; save(); }))));
@@ -451,6 +462,11 @@ export class UI {
     } else {
       content = h('div', { class: 'vgui-form' },
         this.row(t('language'), this.select(getLang(), LANGS.map((l) => [l, t('langName_' + l)]), (v) => { settings.lang = v; save(); setLang(v); })),
+        // the name other players see online (an empty one is asked for again)
+        this.row(t('onlNameOpt'), h('input', {
+          class: 'vgui-input', value: settings.playerName, maxlength: 20, placeholder: t('onlNamePh'),
+          onchange: (e) => { settings.playerName = e.target.value.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 20); save(); },
+        })),
         this.check(t('tracers'), settings.tracers, (v) => { settings.tracers = v; save(); }),
         this.check(t('pauseInMenu'), settings.pauseInMenu, (v) => { settings.pauseInMenu = v; save(); }));
     }
@@ -813,12 +829,25 @@ export class UI {
     return w;
   }
 
+  // a yes / no question in a window of its own
+  confirm(title, text, yes, onYes) {
+    this.dialog = {
+      name: 'confirm',
+      render: () => this.win(title, h('div', { class: 'vgui-desc' }, text), [
+        this.btn(yes, () => { this.dialog = null; onYes(); }, true),
+        this.btn(t('cancel'), () => this.closeDialog()),
+      ]),
+    };
+    this.renderAll();
+  }
+
   // ---------- match end ----------
   // arena: a watched Bot Arena match ({ more: the battle has more to watch, bet: a line about
-  // the bet on it, kind: 'battle' | 'season' | 'cup' })
-  showMatchEnd(title, boardHtml, arena = null) {
+  // the bet on it, kind: 'battle' | 'season' | 'cup' }); online: { host, until } (when
+  // everyone goes back to the lobby, performance.now() time)
+  showMatchEnd(title, boardHtml, arena = null, online = null) {
     this.screen = null;
-    this.dialog = { name: 'end', render: () => this.matchEnd(title, boardHtml, arena) };
+    this.dialog = { name: 'end', render: () => this.matchEnd(title, boardHtml, arena, online) };
     this.renderAll();
   }
 
@@ -840,13 +869,27 @@ export class UI {
     this.renderAll();
   }
 
-  matchEnd(title, boardHtml, arena) {
+  matchEnd(title, boardHtml, arena, online) {
+    // online: how long until everyone is back in the lobby
+    let count = null;
+    if (online) {
+      count = h('div', { class: 'me-count' });
+      const show = () => {
+        const n = Math.max(0, Math.ceil((online.until - performance.now()) / 1000));
+        count.textContent = t(online.host ? 'onlBackInHost' : 'onlBackIn', { n });
+      };
+      show();
+      const timer = setInterval(() => (count.isConnected ? show() : clearInterval(timer)), 250);
+    }
     const body = h('div', { class: 'match-end' },
       h('div', { class: 'me-title' }, title),
+      count,
       arena ? h('div', { class: 'vgui-desc' }, t(arena.kind === 'season' || arena.kind === 'cup' ? 'arenaCounted_' + arena.kind : 'arenaCounted')) : null,
       arena && arena.bet ? h('div', { class: 'me-bet', html: arena.bet }) : null,
       h('div', { class: 'me-board', html: boardHtml }));
-    const buttons = arena ? [
+    const buttons = online ? [
+      online.host ? this.btn(t('onlBackNow'), () => this.on.onlineToLobby(), true) : this.btn(t('onlToLobby'), () => this.on.disconnect(), true),
+    ] : arena ? [
       arena.more ? this.btn(t('arenaWatchNext'), () => this.on.arenaWatchNext(), true) : null,
       this.btn(t('arenaBack'), () => this.on.disconnect(), !arena.more),
     ] : [

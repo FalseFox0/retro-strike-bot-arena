@@ -18,6 +18,20 @@ Keep its window open while you play: Bot Arena's background threads load the gam
 
 > **TR:** Çevrimiçi oyna: https://falsefox0.github.io/retro-strike-bot-arena/ (kurulum yok). Kendi bilgisayarında: `start.bat` dosyasına çift tıkla, oyun http://localhost:8016 adresinde açılır. Oynarken açılan pencereyi kapatma (Bot Arenası ona ihtiyaç duyar).
 
+## Play with friends
+
+Up to 10 players (5 v 5) in every mode and on every map, with bots in the places nobody plays. There's no account and no game server: the host's browser runs the match, and the friends' browsers connect straight to it (WebRTC, encrypted). Connecting takes one copy-paste each way:
+
+1. The host: **Play online → Host**, then **Make an invite link**, and sends it to one friend (each friend needs a link of their own).
+2. The friend opens the link. The game shows them a **reply code**, which they send back.
+3. The host pastes the reply code, and the friend is in the lobby.
+4. Everyone picks a team; the host picks the match settings and presses **Start match**.
+
+Friends can join a running match from the lobby, and a friend's **Esc → Back to the lobby** leaves the match without disconnecting. The host's **Esc → End the match** sends everyone back to the lobby; after a match everyone goes back by themselves after 20 s (the host can go sooner). Keep the host's page open: closing it ends the game for everyone.
+Your own movement doesn't wait for the host, and shots are checked against what the shooter saw (lag compensation). Some networks (often universities, offices or mobile data) block direct connections; the game then says it couldn't connect, and another network may work.
+
+> **TR:** Arkadaşlarla oyna: **Çevrimiçi oyna → Kur**, **Davet bağlantısı oluştur**, bağlantıyı bir arkadaşına gönder; o bağlantıyı açınca çıkan **yanıt kodunu** sana geri gönderir, sen yapıştırırsın. Herkes lobideyken **Maçı başlat**.
+
 ## What's in it
 
 - **Modes:** Team Deathmatch, Free-for-all, Classic rounds, **Bomb defusal** and **Gun Game**. Every mode can be played on every map; bomb defusal needs a map with bomb sites

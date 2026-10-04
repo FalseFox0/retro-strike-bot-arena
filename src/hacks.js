@@ -118,9 +118,12 @@ export function triggerbot(g, p, cmd) {
 // the hacks that change what a player does this tick (before they move)
 export function hackCmd(g, p, cmd, dt) {
   const h = p.hacks;
-  // bots aim with their own brain (bot.js), people with the aimbot
-  if (h.aimbot && !p.isBot) aimbot(g, p, cmd, dt);
-  if (h.triggerbot && !cmd.attack) triggerbot(g, p, cmd);
+  // bots aim with their own brain (bot.js), people with the aimbot; a
+  // friend online aims and pulls the trigger on their own computer (their
+  // keys come with it already)
+  const remote = p.remote != null;
+  if (h.aimbot && !p.isBot && !remote) aimbot(g, p, cmd, dt);
+  if (h.triggerbot && !cmd.attack && !remote) triggerbot(g, p, cmd);
   // holding jump hops again the moment you land
   if (h.autobhop) p.oldJump = false;
 }

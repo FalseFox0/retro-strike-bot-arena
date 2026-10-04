@@ -68,7 +68,7 @@ export class GunGame {
       // a fall (or anything else that wasn't an enemy): one level down
       if (victim.ggLevel > 0) {
         victim.ggLevel--;
-        if (victim === g.human) g.hud.message(t('ggLevelDown', { n: victim.ggLevel + 1, gun: weaponName(LADDER[victim.ggLevel].id) }), g.time, 4);
+        g.tell(victim, 'msg', ['ggLevelDown', { n: victim.ggLevel + 1, gun: weaponName(LADDER[victim.ggLevel].id) }], 4);
       }
       victim.ggKills = 0;
       return;
@@ -88,11 +88,7 @@ export class GunGame {
     p.ggKills = 0;
     // the new gun comes next tick, after the shot that earned it is done
     g.later(0, () => this.arm(p));
-    if (p === g.human) {
-      this.upAt = g.time;
-      g.sound('levelup', p, 0.6);
-      if (p.ggLevel === KNIFE_LEVEL) g.hud.subPrint(t('ggKnifeLevel'), g.time, 3);
-    }
+    g.tell(p, 'ggUp', p.ggLevel === KNIFE_LEVEL);
   }
 
   win(p) {
@@ -100,10 +96,11 @@ export class GunGame {
     this.g.endMatch();
   }
 
+  // (a message: game.js shows it in everyone's language)
   matchTitle() {
     const p = this.winner;
-    if (!p) return t('draw');
-    return p.team ? t('ggWinsTeam', { name: p.name, team: t(p.team === 'T' ? 'teamT' : 'teamCT') }) : t('playerWins', { name: p.name });
+    if (!p) return 'draw';
+    return p.team ? ['ggWinsTeam', { name: p.name, team: [p.team === 'T' ? 'teamT' : 'teamCT'] }] : ['playerWins', { name: p.name }];
   }
 
   // top of the screen: our level, gun and kills, and the gun after it

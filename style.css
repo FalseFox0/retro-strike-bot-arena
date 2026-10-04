@@ -698,3 +698,37 @@ em.hk, .scoreboard em.hk, .me-board em.hk { color: #ff3b2b; font-style: normal; 
 .ar-table.clips td.nm { max-width: 330px; overflow: hidden; text-overflow: ellipsis; }
 .ar-star { background: none; border: 0; color: var(--vg-dim); font-size: 15px; cursor: pointer; padding: 0 4px; }
 .ar-star.on, .ar-star:hover { color: #f2c94c; }
+
+/* ---------- Play online ---------- */
+.w-online { width: 940px; max-height: 100%; }
+.w-online .vgui-body { overflow: auto; }
+.onl { min-height: 320px; }
+.onl-note { margin: 6px 0 10px; padding: 6px 10px; background: rgba(0, 0, 0, 0.25); border-left: 3px solid var(--vg-hl); }
+.onl-note.bad { border-left-color: #d9534a; color: #f0d0c8; }
+.onl-start { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding-top: 6px; }
+.onl-box { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 10px 12px; background: rgba(0, 0, 0, 0.18); }
+.onl-box .vgui-desc { max-width: none; }
+.onl-foot { grid-column: 1 / -1; max-width: none; }
+.onl-name { width: 280px; }
+.onl-code { flex: 1; min-width: 0; width: 100%; font-family: monospace; font-size: 11px; }
+.onl-copyrow { display: flex; gap: 6px; align-items: center; width: 100%; margin: 4px 0; }
+.onl-wait { margin-top: 10px; color: var(--vg-hl); }
+.onl-cols { display: flex; gap: 18px; }
+.onl-left { flex: 0 0 360px; min-width: 0; }
+.onl-right { flex: 1; min-width: 0; }
+.onl-player { display: flex; gap: 8px; align-items: baseline; padding: 4px 7px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.onl-player.me { background: var(--vg-sel); }
+.onl-player b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.onl-tag { font-size: 10px; color: var(--vg-hl); text-transform: uppercase; }
+.onl-tag.play { color: #8fd18a; }
+.onl-running { margin: 0 0 8px; padding: 6px 10px; background: rgba(60, 120, 50, 0.25); border-left: 3px solid #8fd18a; }
+.me-count { margin: 4px 0 8px; color: var(--vg-hl); }
+.onl-ping { min-width: 48px; text-align: right; }
+.onl-invite { margin-top: 12px; }
+.onl-invite .vgui-desc { max-width: none; }
+.onl-settings { min-height: 0; }
+.onl-settings .create-game { flex-direction: column; }
+@media (max-width: 760px) {
+  .onl-start, .onl-cols { display: flex; flex-direction: column; }
+  .onl-left { flex: none; }
+}

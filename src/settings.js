@@ -43,6 +43,7 @@ const STORAGE_KEY = 'cs16remake.settings.v1';
 
 function defaults() {
   const nav = (typeof navigator !== 'undefined' && navigator.language) || '';
+  const match = defaultMatch();
   return {
     lang: nav.toLowerCase().startsWith('tr') ? 'tr' : 'en',
     sensitivity: 3,
@@ -64,37 +65,46 @@ function defaults() {
     hackCfg: { ...HACK_DEFAULTS },
     hackSpecView: 'eye',
     binds: structuredClone(DEFAULT_BINDS),
-    match: {
-      map: 'de_dunetown',
-      mode: 'tdm',
-      bots: 9,
-      difficulty: 'normal',
-      tdmLimit: 75,
-      ffaLimit: 30,
-      timeLimit: 15,
-      roundsToWin: 10,
-      ggTeams: false,
-      // team modes: bots on each side (you join on top of them)
-      botsT: 4,
-      botsCT: 5,
-      // Advanced: round and freeze time, start money, friendly fire, auto team balance
-      roundTime: 0, // minutes, 0 = the mode's own (2:00, bomb defusal 1:45)
-      freezeTime: 3,
-      startMoney: 800,
-      friendlyFire: false,
-      autoBalance: true,
-      // Hacks tab: may players switch hacks on, how many bots hack and with what
-      hacks: false,
-      hackBotsT: 0,
-      hackBotsCT: 0,
-      hackBots: 0, // free-for-all
-      botHacks: Object.fromEntries(HACKS.map((k) => [k, true])),
-      // what the dead may watch: 'team' (teammates only) or 'all' (everyone, every view)
-      deadView: 'team',
-      // Bot Arena characters in the bot slots: from which save ('' = plain bots), and which (null = any)
-      botChars: { save: '', pick: null },
-    },
+    match,
+    // online play: the name others see, and the host's match settings (kept
+    // apart from Create Game's). fill: players a team (or all of them in
+    // free-for-all); bots take the places no human has
+    playerName: '',
+    onlineMatch: { ...structuredClone(match), fill: 5 },
     guns: { primary: 'ak47', secondary: 'deagle', remember: false },
+  };
+}
+
+function defaultMatch() {
+  return {
+    map: 'de_dunetown',
+    mode: 'tdm',
+    bots: 9,
+    difficulty: 'normal',
+    tdmLimit: 75,
+    ffaLimit: 30,
+    timeLimit: 15,
+    roundsToWin: 10,
+    ggTeams: false,
+    // team modes: bots on each side (you join on top of them)
+    botsT: 4,
+    botsCT: 5,
+    // Advanced: round and freeze time, start money, friendly fire, auto team balance
+    roundTime: 0, // minutes, 0 = the mode's own (2:00, bomb defusal 1:45)
+    freezeTime: 3,
+    startMoney: 800,
+    friendlyFire: false,
+    autoBalance: true,
+    // Hacks tab: may players switch hacks on, how many bots hack and with what
+    hacks: false,
+    hackBotsT: 0,
+    hackBotsCT: 0,
+    hackBots: 0, // free-for-all
+    botHacks: Object.fromEntries(HACKS.map((k) => [k, true])),
+    // what the dead may watch: 'team' (teammates only) or 'all' (everyone, every view)
+    deadView: 'team',
+    // Bot Arena characters in the bot slots: from which save ('' = plain bots), and which (null = any)
+    botChars: { save: '', pick: null },
   };
 }
 
@@ -132,6 +142,41 @@ function loadCrosshair(s, d) {
   return c;
 }
 
+// a saved match setup with anything out of range set back to the default (raw: what was saved)
+function cleanMatch(m, dm, raw) {
+  m.mode = pick(m.mode, ['tdm', 'ffa', 'classic', 'bomb', 'gungame'], dm.mode);
+  m.map = pick(m.map, ['aim_classic', 'de_dunetown', 'de_foundry', 'fy_poolhouse', 'awp_rooftops'], dm.map);
+  if (m.mode === 'bomb' && !m.map.startsWith('de_')) m.mode = 'classic';
+  m.difficulty = pick(m.difficulty, ['easy', 'normal', 'hard', 'expert'], dm.difficulty);
+  m.bots = num(m.bots, 0, 15, dm.bots);
+  for (const k of ['tdmLimit', 'ffaLimit', 'timeLimit', 'roundsToWin']) m[k] = num(m[k], 0, 1000, dm[k]);
+  if (m.roundsToWin < 1) m.roundsToWin = dm.roundsToWin;
+  m.ggTeams = !!m.ggTeams;
+  // the per-team bot counts came later: split the old total
+  if (!raw || raw.botsT === undefined) {
+    m.botsT = Math.floor(m.bots / 2);
+    m.botsCT = m.bots - m.botsT;
+  }
+  m.botsT = num(m.botsT, 0, MAX_TEAM_BOTS, dm.botsT);
+  m.botsCT = num(m.botsCT, 0, MAX_TEAM_BOTS, dm.botsCT);
+  m.roundTime = ROUND_TIMES.includes(m.roundTime) ? m.roundTime : 0;
+  m.freezeTime = num(m.freezeTime, 0, 10, dm.freezeTime);
+  m.startMoney = num(m.startMoney, 800, 16000, dm.startMoney);
+  for (const k of ['friendlyFire', 'autoBalance', 'hacks']) if (typeof m[k] !== 'boolean') m[k] = dm[k];
+  m.hackBotsT = num(m.hackBotsT, 0, MAX_TEAM_BOTS, 0);
+  m.hackBotsCT = num(m.hackBotsCT, 0, MAX_TEAM_BOTS, 0);
+  m.hackBots = num(m.hackBots, 0, 15, 0);
+  const bh = m.botHacks && typeof m.botHacks === 'object' ? m.botHacks : {};
+  m.botHacks = Object.fromEntries(HACKS.map((k) => [k, typeof bh[k] === 'boolean' ? bh[k] : true]));
+  m.deadView = pick(m.deadView, ['team', 'all'], dm.deadView);
+  const bc = m.botChars && typeof m.botChars === 'object' ? m.botChars : {};
+  m.botChars = {
+    save: typeof bc.save === 'string' ? bc.save : '',
+    pick: Array.isArray(bc.pick) ? bc.pick.filter((x) => typeof x === 'string') : null,
+  };
+  return m;
+}
+
 function load() {
   const d = defaults();
   try {
@@ -165,37 +210,10 @@ function load() {
     out.brightness = num(out.brightness, 0.5, 1.5, d.brightness);
     out.guns.primary = pick(out.guns.primary, PRIMARY_IDS, d.guns.primary);
     out.guns.secondary = pick(out.guns.secondary, SECONDARY_IDS, d.guns.secondary);
-    const m = out.match;
-    m.mode = pick(m.mode, ['tdm', 'ffa', 'classic', 'bomb', 'gungame'], d.match.mode);
-    m.map = pick(m.map, ['aim_classic', 'de_dunetown', 'de_foundry', 'fy_poolhouse', 'awp_rooftops'], d.match.map);
-    if (m.mode === 'bomb' && !m.map.startsWith('de_')) m.mode = 'classic';
-    m.difficulty = pick(m.difficulty, ['easy', 'normal', 'hard', 'expert'], d.match.difficulty);
-    m.bots = num(m.bots, 0, 15, d.match.bots);
-    for (const k of ['tdmLimit', 'ffaLimit', 'timeLimit', 'roundsToWin']) m[k] = num(m[k], 0, 1000, d.match[k]);
-    if (m.roundsToWin < 1) m.roundsToWin = d.match.roundsToWin;
-    m.ggTeams = !!m.ggTeams;
-    // the per-team bot counts came later: split the old total
-    if (!s.match || s.match.botsT === undefined) {
-      m.botsT = Math.floor(m.bots / 2);
-      m.botsCT = m.bots - m.botsT;
-    }
-    m.botsT = num(m.botsT, 0, MAX_TEAM_BOTS, d.match.botsT);
-    m.botsCT = num(m.botsCT, 0, MAX_TEAM_BOTS, d.match.botsCT);
-    m.roundTime = ROUND_TIMES.includes(m.roundTime) ? m.roundTime : 0;
-    m.freezeTime = num(m.freezeTime, 0, 10, d.match.freezeTime);
-    m.startMoney = num(m.startMoney, 800, 16000, d.match.startMoney);
-    for (const k of ['friendlyFire', 'autoBalance', 'hacks']) if (typeof m[k] !== 'boolean') m[k] = d.match[k];
-    m.hackBotsT = num(m.hackBotsT, 0, MAX_TEAM_BOTS, 0);
-    m.hackBotsCT = num(m.hackBotsCT, 0, MAX_TEAM_BOTS, 0);
-    m.hackBots = num(m.hackBots, 0, 15, 0);
-    const bh = m.botHacks && typeof m.botHacks === 'object' ? m.botHacks : {};
-    m.botHacks = Object.fromEntries(HACKS.map((k) => [k, typeof bh[k] === 'boolean' ? bh[k] : true]));
-    m.deadView = pick(m.deadView, ['team', 'all'], d.match.deadView);
-    const bc = m.botChars && typeof m.botChars === 'object' ? m.botChars : {};
-    m.botChars = {
-      save: typeof bc.save === 'string' ? bc.save : '',
-      pick: Array.isArray(bc.pick) ? bc.pick.filter((x) => typeof x === 'string') : null,
-    };
+    out.match = cleanMatch(out.match, d.match, s.match);
+    out.onlineMatch = cleanMatch({ ...d.onlineMatch, ...(s.onlineMatch || {}) }, d.onlineMatch, s.onlineMatch);
+    out.onlineMatch.fill = num(out.onlineMatch.fill, 1, 10, d.onlineMatch.fill);
+    out.playerName = typeof out.playerName === 'string' ? out.playerName.slice(0, 20) : '';
     out.hackCfg = hackCfg(out.hackCfg);
     out.hackSpecView = pick(out.hackSpecView, ['off', 'eye', 'all'], d.hackSpecView);
     for (const k of ['invertMouse', 'rawInput', 'fullscreen', 'showFps', 'pauseInMenu', 'tracers']) if (typeof out[k] !== 'boolean') out[k] = d[k];

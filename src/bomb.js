@@ -59,7 +59,7 @@ export class BombMode {
   addMoney(p, amount) {
     const before = p.money;
     p.money = Math.max(0, Math.min(MONEY.max, p.money + amount));
-    if (p === this.g.human && p.money !== before) this.g.hud.moneyChange(p.money - before);
+    if (p.money !== before) this.g.tell(p, 'money', p.money - before);
   }
 
   onJoin(p) {
@@ -336,7 +336,7 @@ export class BombMode {
       if (!it) continue;
       it.giftFor = p;
       this.buy(giver, rifle, true);
-      if (p === g.human) g.hud.message(t('gunDroppedForYou', { name: giver.name, gun: weaponName(own.id) }), g.time, 6);
+      g.tell(p, 'msg', ['gunDroppedForYou', { name: giver.name, gun: weaponName(own.id) }], 6);
     }
     for (const r of rich) r.gave = false;
   }
@@ -345,7 +345,7 @@ export class BombMode {
     p.weapons[5] = makeWeapon('c4');
     this.removeBomb();
     this.bomb = { state: 'carried', carrier: p };
-    if (p === this.g.human) this.g.hud.message(t('youHaveBomb'), this.g.time, 8);
+    this.g.tell(p, 'msg', 'youHaveBomb', 8);
   }
 
   carrier() {
@@ -387,7 +387,7 @@ export class BombMode {
   // returns true if something was bought; messages only for the human
   buy(p, id, quiet = false) {
     const g = this.g;
-    const say = (key, vars) => { if (!quiet && p === g.human) g.hud.message(t(key, vars), g.time, 4); };
+    const say = (key, vars) => { if (!quiet) g.tell(p, 'msg', [key, vars], 4); };
     const blocked = this.buyBlocked(p);
     if (blocked) {
       say(blocked, { n: BUY_TIME });
@@ -433,7 +433,7 @@ export class BombMode {
         selectSlot(g, p, def.slot);
       }
     }
-    if (p === g.human) g.soundSys.play('buy', { volume: 0.6 });
+    g.tell(p, 'sound', 'buy', { volume: 0.6 });
     return true;
   }
 
@@ -441,7 +441,7 @@ export class BombMode {
   autobuy(p) {
     const blocked = this.buyBlocked(p);
     if (blocked) {
-      if (p === this.g.human) this.g.hud.message(t(blocked, { n: BUY_TIME }), this.g.time, 4);
+      this.g.tell(p, 'msg', [blocked, { n: BUY_TIME }], 4);
       return;
     }
     if (!p.weapons[1]) {
@@ -460,7 +460,7 @@ export class BombMode {
   rebuy(p) {
     const blocked = this.buyBlocked(p);
     if (blocked) {
-      if (p === this.g.human) this.g.hud.message(t(blocked, { n: BUY_TIME }), this.g.time, 4);
+      this.g.tell(p, 'msg', [blocked, { n: BUY_TIME }], 4);
       return;
     }
     for (const id of p.lastBuys) {
@@ -600,7 +600,7 @@ export class BombMode {
   onBombDropped(it) {
     const g = this.g;
     this.bomb = { state: 'dropped', carrier: null, item: it };
-    if (g.human && g.human.team === 'T') g.hud.message(t('bombDroppedMsg'), g.time, 4);
+    for (const p of g.players) if (p.team === 'T') g.tell(p, 'msg', 'bombDroppedMsg', 4);
   }
 
   // picking up the bomb (Terrorists) or a defuse kit (Counter-Terrorists)
@@ -610,7 +610,7 @@ export class BombMode {
       if (p.team !== 'T') return false;
       this.bomb = null; // the item goes away in items.js
       this.giveBomb(p);
-      if (g.human && g.human.team === 'T' && p !== g.human) g.hud.message(t('bombPickedUp', { name: p.name }), g.time, 4);
+      for (const o of g.players) if (o.team === 'T' && o !== p) g.tell(o, 'msg', ['bombPickedUp', { name: p.name }], 4);
       return true;
     }
     if (p.team !== 'CT' || p.defuser) return false;
@@ -718,7 +718,7 @@ export class BombMode {
     b.defusePos = p.pos.clone();
     p.defusing = true;
     g.sound('c4_disarm', p, 0.7);
-    if (p === g.human) g.hud.message(t(p.defuser ? 'defusingKit' : 'defusing'), g.time, 3);
+    g.tell(p, 'msg', p.defuser ? 'defusingKit' : 'defusing', 3);
     return true;
   }
 

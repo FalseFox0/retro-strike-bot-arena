@@ -78,10 +78,19 @@ export class TeamRadio {
     const key = RADIO_MENU[n - 1];
     const g = this.g, h = g.human;
     if (!key || !h.alive || !h.team) return;
-    this.say(h, key);
+    // a friend online: the host's game says it for them
+    if (g.client) g.client.send({ t: 'radio', key });
+    else this.order(h, key);
+  }
+
+  // a person picked a line from the menu (online, a friend too)
+  order(p, key) {
+    const g = this.g;
+    if (!RADIO_MENU.includes(key) || !p.alive || !p.team) return;
+    this.say(p, key);
     // a teammate bot answers orders and calls
     if (!ANSWERED.has(key)) return;
-    const mates = g.players.filter((p) => p.isBot && p.alive && p.team === h.team);
+    const mates = g.players.filter((o) => o.isBot && o.alive && o.team === p.team);
     if (!mates.length) return;
     const b = mates[(Math.random() * mates.length) | 0];
     const answer = Math.random() < 0.15 ? 'negative' : Math.random() < 0.5 ? 'affirmative' : 'roger';
@@ -98,14 +107,22 @@ export class TeamRadio {
       this.lastBot[p.team] = g.time;
       p.radioSaid[key] = g.time;
     }
+    if (g.net) g.net.radio(p, key);
+    this.show(p, key);
+    return true;
+  }
+
+  // what everyone sees and hears of it (a friend's game online: from the host)
+  show(p, key) {
+    const g = this.g;
+    if (!SPOKEN[key]) return;
     p.radioUntil = g.time + ICON_TIME;
-    if (!this.hears(p.team)) return true;
+    if (!this.hears(p.team)) return;
     g.hud.radioMessage(p, t('radio_' + key), g.time);
     if (!p.isBot || g.time - this.lastVoice >= VOICE_GAP) {
       this.lastVoice = g.time;
       radio.say(SPOKEN[key]);
     }
-    return true;
   }
 
   // does the human hear this team's radio?
