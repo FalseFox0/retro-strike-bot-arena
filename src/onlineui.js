@@ -55,8 +55,14 @@ export class OnlineScreens {
     this.ui.renderAll();
   }
 
-  // a friend opened an invite link
+  // a friend opened an invite link (a newer one replaces an invite still
+  // waiting for its host)
   openInvite(code) {
+    const s = this.session;
+    if (s instanceof ClientSession && !s.lobby) {
+      this.session = null;
+      s.close();
+    }
     if (this.session) return this.open('lobby');
     this.joinText = code;
     this.view = 'join';
@@ -133,9 +139,10 @@ export class OnlineScreens {
         this.fillPlayers(this.listEl);
       } else this.redraw();
     });
-    s.on('join', (p) => this.say('onlJoined', false, { name: p.name }));
-    s.on('leave', (p) => this.say('onlLeft', false, { name: p.name }));
-    s.on('failed', (relay) => this.say(relay ? 'onlFriendFailedRelay' : 'onlFriendFailed', true));
+    // (a game we closed says nothing more)
+    s.on('join', (p) => { if (s === this.session) this.say('onlJoined', false, { name: p.name }); });
+    s.on('leave', (p) => { if (s === this.session) this.say('onlLeft', false, { name: p.name }); });
+    s.on('failed', (relay) => { if (s === this.session) this.say(relay ? 'onlFriendFailedRelay' : 'onlFriendFailed', true); });
     s.on('end', (why) => {
       if (s !== this.session) return;
       this.session = null;
@@ -219,7 +226,10 @@ export class OnlineScreens {
 
   copy(text, what) {
     const done = () => { this.copied = what; this.redraw(); setTimeout(() => { if (this.copied === what) { this.copied = ''; this.redraw(); } }, 1500); };
-    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, () => {});
+    // the old way where the clipboard can't be written to directly
+    const old = () => { if (copyOld(text)) done(); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, old);
+    else old();
   }
 
   // ---------------------------------------------------------------- window
@@ -419,3 +429,17 @@ export class OnlineScreens {
 }
 
 const ui_row = (k, v) => h('div', { class: 'vgui-row' }, h('label', {}, k), h('span', {}, v));
+
+// copy through a hidden text box (true: it worked)
+function copyOld(text) {
+  const box = Object.assign(document.createElement('textarea'), { value: text, readOnly: true });
+  box.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+  document.body.append(box);
+  box.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch { /* not allowed */ }
+  box.remove();
+  return ok;
+}

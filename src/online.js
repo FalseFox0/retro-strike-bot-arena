@@ -20,6 +20,7 @@ export const MAX_TEAM = 5;         // humans on one team
 const PING_EVERY = 2000;
 const CONNECT_MS = 30000;          // host: how long a friend has to connect once their reply is in
 const PATIENCE_MS = 5 * 60000;     // friend: how long to wait for the host to add the reply
+const OPEN_INVITES = 20;           // host: invites waiting for a reply at most
 export const TEAMS = ['auto', 'T', 'CT', 'spec'];
 
 const cleanName = (s) => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 20);
@@ -69,9 +70,12 @@ export class HostSession extends Emitter {
   get me() { return this.players[0]; }
   friends() { return this.players.filter((p) => p.link); }
 
-  // a new invite: { id, code, url }
+  // a new invite: { id, code, url }. Invites nobody answered don't take a
+  // place (the lobby fills when people come in); past OPEN_INVITES the
+  // oldest one stops working.
   async invite() {
-    if (this.players.length + this.invites.size >= MAX_PLAYERS) throw new Error('full');
+    if (this.players.length >= MAX_PLAYERS) throw new Error('full');
+    while (this.invites.size >= OPEN_INVITES) this.cancelInvite(this.invites.keys().next().value);
     let id = newInviteId();
     while (this.invites.has(id)) id = newInviteId();
     const link = new Link(this.relay);

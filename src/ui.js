@@ -470,7 +470,7 @@ export class UI {
         })),
         this.check(t('tracers'), settings.tracers, (v) => { settings.tracers = v; save(); }),
         this.check(t('pauseInMenu'), settings.pauseInMenu, (v) => { settings.pauseInMenu = v; save(); }),
-        this.relayOptions(save));
+        this.relayOptions());
     }
     return this.win(t('options'), h('div', {}, tabBar, h('div', { class: 'vgui-tabbody' }, content)), [
       this.btn(t('ok'), () => this.closeDialog(), true),
@@ -478,11 +478,12 @@ export class UI {
   }
 
   // the relay for online games you host (Options -> Game), with a test button
-  relayOptions(save) {
+  // (typing only saves: nothing else needs to know)
+  relayOptions() {
     const r = settings.relay;
     const field = (k, placeholder, type = 'text') => h('input', {
       class: 'vgui-input opt-relay', type, value: r[k], placeholder, spellcheck: false, autocomplete: type === 'password' ? 'new-password' : 'off',
-      oninput: (e) => { r[k] = e.target.value.trim().slice(0, 200); save(); },
+      oninput: (e) => { r[k] = e.target.value.trim().slice(0, 200); saveSettings(); },
     });
     const result = h('span', { class: 'opt-relayres' });
     const test = async () => {

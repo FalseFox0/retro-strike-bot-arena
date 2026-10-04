@@ -30,10 +30,15 @@ function showCode(key) {
   const input = Object.assign(document.createElement('input'), { className: 'vgui-input rl-code', value: code, readOnly: true });
   input.onfocus = () => input.select();
   const copy = Object.assign(document.createElement('button'), { className: 'vgui-btn primary', textContent: t('onlCopy') });
+  const copied = () => { copy.textContent = t('onlCopied'); };
+  // (the old way where the clipboard can't be written to directly)
+  const old = () => {
+    input.select();
+    try { if (document.execCommand('copy')) copied(); } catch { /* selected: Ctrl+C works */ }
+  };
   copy.onclick = () => {
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(code).then(() => { copy.textContent = t('onlCopied'); }, () => {});
-    } else input.select();
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(code).then(copied, old);
+    else old();
   };
   const row = Object.assign(document.createElement('div'), { className: 'rl-row' });
   row.append(input, copy);
