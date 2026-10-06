@@ -59,8 +59,9 @@ else {
       if (done) return;
       done = true;
       channel.close();
-      // a tab that took it wins; else the most telling answer
-      const ok = answers.includes('ok');
+      // a tab that took it wins (or had it already: the link clicked twice);
+      // else the most telling answer
+      const ok = answers.includes('ok') || answers.includes('again');
       if (ok) {
         say(t('rlSent'));
         // (a tab opened from a link may close itself; if not, the text says so)
@@ -76,7 +77,7 @@ else {
       const m = e.data;
       if (!m || m.t !== 'replied' || m.nonce !== nonce) return;
       answers.push(m.result);
-      if (m.result === 'ok') finish();
+      if (m.result === 'ok' || m.result === 'again') finish();
     };
     channel.postMessage({ t: 'reply', code, nonce });
     setTimeout(finish, WAIT_MS);

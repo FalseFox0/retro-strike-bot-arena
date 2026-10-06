@@ -63,6 +63,7 @@ export class HostSession extends Emitter {
     // pid 0 is the host
     this.players = [{ pid: 0, name: cleanName(name) || 'Host', team: 'auto', ping: 0, link: null }];
     this.invites = new Map();        // invite id -> Link waiting for its reply
+    this.taken = new Map();          // invite id -> the reply it got (a reply link clicked twice)
     this.pinger = setInterval(() => this.pingAll(), PING_EVERY);
     this.closed = false;
   }
@@ -92,14 +93,23 @@ export class HostSession extends Emitter {
   }
 
   // the friend's reply code arrived: connect them. Throws 'code' / 'version'
-  // / 'other' (a reply to an invite we don't have) / 'full'
+  // / 'other' (a reply to an invite we don't have) / 'full' / 'again' (this
+  // very reply is in already)
   async accept(code) {
     const clean = code.trim().replace(/\s+/g, '');
     // the code says which invite it answers
-    const link = this.invites.get(replyId(clean));
+    const id = replyId(clean);
+    if (this.taken.get(id) === clean) throw new Error('again');
+    const link = this.invites.get(id);
     if (!link) throw new Error('other');
     if (this.players.length >= MAX_PLAYERS) throw new Error('full');
-    await link.accept(clean);
+    this.taken.set(id, clean);
+    try {
+      await link.accept(clean);
+    } catch (e) {
+      this.taken.delete(id);
+      throw e;
+    }
     this.invites.delete(link.id);
     this.attach(link);
   }

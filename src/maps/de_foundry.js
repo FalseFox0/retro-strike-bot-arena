@@ -387,10 +387,11 @@ function props({ group, disposables }) {
 function spawns() {
   const T = [], CT = [];
   for (const z of [1720, 1860]) for (const x of [-320, -160, 0, 160, 320]) T.push({ x, y: 0, z, yaw: 0 });
-  for (const z of [-1480, -1830]) for (const x of [-320, -160, 0, 160, 320]) CT.push({ x, y: 0, z, yaw: Math.PI });
+  // (the back row's last one stands clear of the crate in the corner)
+  for (const z of [-1480, -1830]) for (const x of [-320, -160, 0, 160, z === -1830 ? 240 : 320]) CT.push({ x, y: 0, z, yaw: Math.PI });
   const extra = [
     [-1700, 1000], [-1700, 0], [-1300, -1600], [-1700, -1000], [-1000, -1400], [-560, -1120], [-900, 0], [0, 800], [0, -200], [0, -900],
-    [1100, -100], [1500, 600], [1250, 900], [800, -1000], [1700, -1500], [1300, -1150], [1400, 1500], [-1400, 1600],
+    [1100, -100], [1500, 400], [1250, 900], [800, -1000], [1700, -1500], [1300, -1150], [1400, 1500], [-1400, 1650],
   ].map(([x, z]) => ({ x, y: 0, z, yaw: Math.atan2(x, z) }));
   return { T, CT, ffa: [...T, ...CT, ...extra] };
 }

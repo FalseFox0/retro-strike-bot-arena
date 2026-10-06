@@ -216,7 +216,11 @@ function withLoading(name, fn) {
   }
   const el = document.createElement('div');
   el.id = 'boot';
-  el.innerHTML = `<div class="boot-box"><div class="boot-title">${name}</div><div class="boot-text">${t('loadingMap')}</div></div>`;
+  // (as text: online, the name comes from the host's game)
+  const box = Object.assign(document.createElement('div'), { className: 'boot-box' });
+  box.append(Object.assign(document.createElement('div'), { className: 'boot-title', textContent: name }),
+    Object.assign(document.createElement('div'), { className: 'boot-text', textContent: t('loadingMap') }));
+  el.append(box);
   document.body.append(el);
   // let the browser paint it before the work starts (a hidden tab paints
   // nothing, and an online match can't wait for it: a timer goes too)

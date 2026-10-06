@@ -17,7 +17,11 @@ import rooftops from './maps/awp_rooftops.js';
 export const MAPS = { aim_classic: aimClassic, de_dunetown: dunetown, de_foundry: foundry, fy_poolhouse: poolhouse, awp_rooftops: rooftops };
 export const MAP_LIST = Object.keys(MAPS);
 // maps with bomb sites can host bomb defusal
-export const isBombMap = (name) => !!MAPS[name]?.bombsites;
+export const isBombMap = (name) => !!mapDef(name, null)?.bombsites;
+// a map by its name (an unknown name: the fallback)
+function mapDef(name, fallback = aimClassic) {
+  return Object.hasOwn(MAPS, name) ? MAPS[name] : fallback;
+}
 
 // Every surface material: texture, tiling (world units per texture, 0 = one
 // texture per face), bullet penetration factor, impact sound / colour / decal.
@@ -330,7 +334,7 @@ function navFor(def, world, doors, ladders) {
 // The same map without anything to draw (no meshes, lightmap or textures):
 // Bot Arena plays its background matches on these.
 export function buildWorld(name) {
-  const def = MAPS[name] || aimClassic;
+  const def = mapDef(name);
   const { boxes, doors, ladders, water, world } = layout(def);
   const breakables = [];
   for (const b of boxes) {
@@ -360,7 +364,7 @@ export function buildWorld(name) {
 }
 
 export function buildMap(name, scene, T) {
-  const def = MAPS[name] || aimClassic;
+  const def = mapDef(name);
   const { boxes, doors, ladders, water, world } = layout(def);
   const bounds = def.bounds;
   // faces outside this aren't drawn (a map can show scenery past where you can walk)
@@ -652,7 +656,7 @@ export function buildMap(name, scene, T) {
 const OVERVIEWS = new Map();
 export function mapOverview(name) {
   if (OVERVIEWS.has(name)) return OVERVIEWS.get(name);
-  const def = MAPS[name] || aimClassic;
+  const def = mapDef(name);
   const b = def.bounds;
   const bw = b.maxX - b.minX + 128, bh = b.maxZ - b.minZ + 128;
   const s = 1024 / Math.max(bw, bh);
@@ -692,7 +696,7 @@ export function mapOverview(name) {
 
 // Top-down picture of a map for the Create Game screen.
 export function mapPreview(name, w = 220, h = 146) {
-  const def = MAPS[name] || aimClassic;
+  const def = mapDef(name);
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;

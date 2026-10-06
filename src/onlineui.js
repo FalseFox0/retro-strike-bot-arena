@@ -188,13 +188,14 @@ export class OnlineScreens {
   }
 
   async addReply() {
-    if (this.reply.trim() && (await this.acceptReply(this.reply)) === 'ok') {
+    const r = this.reply.trim() ? await this.acceptReply(this.reply) : '';
+    if (r === 'ok' || r === 'again') {
       this.reply = '';
       this.redraw();
     }
   }
 
-  // a friend's reply (link or code) -> 'ok' | 'other' | 'full' | 'version' | 'bad' | 'nohost'
+  // a friend's reply (link or code) -> 'ok' | 'again' | 'other' | 'full' | 'version' | 'bad' | 'nohost'
   async acceptReply(text) {
     const s = this.session;
     if (!s || s.role !== 'host') return 'nohost';
@@ -202,9 +203,10 @@ export class OnlineScreens {
     try {
       await s.accept(codeFrom(text));
     } catch (e) {
-      result = ['other', 'full', 'version'].includes(e.message) ? e.message : 'bad';
+      result = ['again', 'other', 'full', 'version'].includes(e.message) ? e.message : 'bad';
     }
     if (result === 'ok') this.say('onlConnecting');
+    else if (result === 'again') this.say('onlReplyAgain');
     else this.say({ other: 'onlReplyOther', full: 'onlFull', version: 'onlEnded_version', bad: 'onlReplyBad' }[result], true);
     return result;
   }
@@ -214,7 +216,7 @@ export class OnlineScreens {
     if (!m || m.t !== 'reply' || typeof m.code !== 'string' || this.session?.role !== 'host') return;
     const result = await this.acceptReply(m.code);
     this.channel?.postMessage({ t: 'replied', nonce: m.nonce, result });
-    if (result === 'ok' && !this.isOpen() && !this.on.inMatch?.()) this.open('lobby');
+    if ((result === 'ok' || result === 'again') && !this.isOpen() && !this.on.inMatch?.()) this.open('lobby');
   }
 
   // a reply link opened in this very tab (pasted into its address bar)

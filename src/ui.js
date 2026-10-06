@@ -32,7 +32,8 @@ function h(tag, attrs = {}, ...kids) {
     else if (k === 'html') e.innerHTML = v;
     else e.setAttribute(k, v === true ? '' : v);
   }
-  for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c));
+  // (lists inside lists too: a whole list of rows can sit in one)
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c));
   return e;
 }
 

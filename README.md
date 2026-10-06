@@ -111,7 +111,9 @@ index.html, style.css     page, HUD and menu styling
 serve.py, start.bat       local web server (for playing without the internet)
 lib/three.module.js       Three.js r170 (MIT, see lib/three.LICENSE.txt)
 src/main.js               renderer, main loop, pointer lock / fullscreen
+src/config.js             shared constants (tick rate, player size, 1.6 movement values)
 src/game.js               match rules, shooting, damage, rounds, breakables, cameras
+src/player.js, input.js   the player and their hitboxes; keys and mouse (rebindable)
 src/bomb.js               bomb defusal: money, buying, the C4, the bots' team plans
 src/gungame.js            Gun Game: the gun ladder, levels, the knife win
 src/items.js              guns on the ground: drops, pickups, the guns fy_ maps put out
@@ -136,6 +138,13 @@ src/highlights.js         records matches and cuts out their best moments
 src/replay.js             plays a highlight back in the game view
 src/clipstore.js          keeps the highlights' recordings (IndexedDB)
 src/matchstats.js         what each player did in a Bot Arena match
+src/net.js                the connection between browsers (WebRTC), invite and reply codes, the relay
+src/online.js             the online lobby: the host's session and a friend's
+src/onlineui.js           the Play online window (name, invite links, replies, the lobby)
+src/nethost.js            hosting an online match: the friends' keys in, snapshots and events out
+src/netclient.js          a friend's side of an online match (own movement at once, the others smoothly)
+src/netsync.js            what online matches send many times a second, packed into bytes
+src/replylink.js          the small page a reply link opens: hands the reply to the game's tab
 src/bot.js, src/nav.js    bot AI (fighting, grenades, the bomb plans) and A* navigation grid
 src/map.js, collision.js  map building (lightmaps, breakables, signs), collision grid
 src/maps/                 map layouts: de_dunetown, de_foundry, fy_poolhouse, awp_rooftops, aim_classic; kit.js helpers

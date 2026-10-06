@@ -360,7 +360,8 @@ export class Link {
     await gathered(this.pc);
     const d = parseSdp(this.pc.localDescription.sdp);
     const f = await shortFp(this.pc, d);
-    this.sent = pickHost(d.cands);
+    // (only what the code can carry: a reply's 'same' points into this list)
+    this.sent = pickHost(d.cands).filter((c) => addrBytes(c.addr));
     this.peer = await friendCreds(d.pwd);
     const w = new Writer();
     w.u8((VERSION << 4) | KIND.invite);

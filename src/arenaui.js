@@ -164,7 +164,14 @@ export class ArenaScreens {
   }
 
   get save() {
-    return this.store.saves.find((s) => s.id === this.store.current) || null;
+    const st = this.store;
+    let save = st.saves.find((s) => s.id === st.current);
+    // (the current one gone: the first one takes over)
+    if (!save && st.saves.length) {
+      save = st.saves[0];
+      st.current = save.id;
+    }
+    return save || null;
   }
 
   open(tab) {

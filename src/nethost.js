@@ -10,6 +10,7 @@ import { MSG, SNAP_TICKS, Out, readCmds, writeCommon, writeMe } from './netsync.
 import { FX } from './highlights.js';
 import { HACKS } from './hacks.js';
 import { WEAPONS } from './weapons.js';
+import { EQUIP } from './bomb.js';
 import { MAX_TEAM } from './online.js';
 
 const STEADY = 2;         // more keys waiting than this: run extra ones to catch up
@@ -278,7 +279,8 @@ export class NetHost {
         break;
       }
       case 'buy':
-        if (g.bm && p.alive && typeof msg.id === 'string') g.bm.buy(p, msg.id);
+        // (only real things to buy: a made-up name could break the player)
+        if (g.bm && p.alive && typeof msg.id === 'string' && (Object.hasOwn(WEAPONS, msg.id) || Object.hasOwn(EQUIP, msg.id))) g.bm.buy(p, msg.id);
         break;
       case 'autobuy': case 'rebuy':
         if (g.bm && p.alive) g.bm[msg.t](p);

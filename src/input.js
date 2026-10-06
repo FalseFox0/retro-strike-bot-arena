@@ -5,6 +5,10 @@ import { settings } from './settings.js';
 
 const MOUSE_CODES = ['MOUSE1', 'MOUSE3', 'MOUSE2', 'MOUSE4', 'MOUSE5'];
 
+// a text box or other control in a menu has the keys (typing a name or
+// pasting a code with Ctrl+V while a match goes on)
+const formControl = (el) => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+
 export function keyName(code) {
   if (!code) return '';
   if (code.startsWith('Key')) return code.slice(3);
@@ -47,7 +51,7 @@ export class Input {
       this.mouseDY += e.movementY;
     });
     window.addEventListener('blur', () => this.down.clear());
-    window.addEventListener('contextmenu', (e) => { if (this.gameActive) e.preventDefault(); });
+    window.addEventListener('contextmenu', (e) => { if (this.gameActive && !formControl(e.target)) e.preventDefault(); });
   }
 
   onKeyDown(e) {
@@ -55,7 +59,7 @@ export class Input {
       e.preventDefault();
       return;
     }
-    if (!this.gameActive) return;
+    if (!this.gameActive || formControl(e.target)) return;
     // Keep the browser from scrolling / tabbing while playing.
     if (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow') || e.ctrlKey || e.altKey) e.preventDefault();
     // function keys that are bound (F1 autobuy...) shouldn't open browser help

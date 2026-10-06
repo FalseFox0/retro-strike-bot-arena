@@ -15,6 +15,8 @@ import { settings } from './settings.js';
 import { tmsg } from './i18n.js';
 import { TICK } from './config.js';
 import { priceOf } from './bomb.js';
+import { FX } from './highlights.js';
+import { KNIFE_LEVEL } from './gungame.js';
 import { MSG, PF, NONE, WEAPON_IDS, readSnap, writeCmds } from './netsync.js';
 
 const INTERP = 0.1;     // others are shown this far in the past (between two snapshots)
@@ -23,6 +25,9 @@ const RESEND = 8;       // the newest keys go out again with each send (packets 
 const BOMB = { id: 'c4' }; // a bomb on someone's back (the model only asks if there is one)
 
 const vec = (a) => (Array.isArray(a) ? new THREE.Vector3(a[0], a[1], a[2]) : a);
+// what the host sends goes on screen: numbers stay numbers, colors colors
+const num = (x) => (Number.isFinite(+x) ? +x : 0);
+const color = (c) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c : null);
 const lerpAngle = (a, b, k) => {
   let x = b - a;
   while (x > Math.PI) x -= Math.PI * 2;
@@ -60,7 +65,7 @@ export class NetClient {
     this.g = g;
     const st = this.start;
     g.time = this.rt;
-    for (const e of st.roster) this.puppet(e);
+    for (const e of st.roster) if (Array.isArray(e) && Number.isInteger(e[0])) this.puppet(e);
     g.human = g.byId(st.you);
     if (!g.human) {
       // (can't happen: the host lists us) a watcher with no body
@@ -84,12 +89,12 @@ export class NetClient {
   // a player as the host lists them: [id, name, team, look, bot, pid, color, spectator]
   puppet(e) {
     const g = this.g;
-    const [id, name, team, look, bot, pid, color, spec] = e;
+    const [id, name, team, look, bot, pid, mark, spec] = e;
     const p = new Player(id, name, !!bot);
     p.team = team;
     p.spectator = !!spec;
     p.pid = pid;
-    p.char = color ? { color } : null;
+    p.char = color(mark) ? { color: color(mark) } : null;
     p.hacks = noHacks();
     p.hackCfg = hackCfg(null);
     p.guns = {};
@@ -156,8 +161,17 @@ export class NetClient {
     if (!Array.isArray(e)) return;
     const kind = e[1];
     // for our own screen, and what our own player does: right away
-    if (AT_ONCE.has(kind) || (OUR_OWN.has(kind) && e[2] === this.g.human.id)) this.happen(e);
+    if (AT_ONCE.has(kind) || (OUR_OWN.has(kind) && e[2] === this.g.human.id)) this.safely(e);
     else this.events.push(e);
+  }
+
+  // one event going wrong mustn't hold up the ones after it
+  safely(e) {
+    try {
+      this.happen(e);
+    } catch (err) {
+      console.warn('online event failed:', e[1], err);
+    }
   }
 
   // ---------------------------------------------------------------- our player
@@ -282,7 +296,7 @@ export class NetClient {
     // what has happened by now, and where everyone is
     const evs = this.events;
     let i = 0;
-    while (i < evs.length && evs[i][0] <= this.rt) this.happen(evs[i++]);
+    while (i < evs.length && evs[i][0] <= this.rt) this.safely(evs[i++]);
     if (i) evs.splice(0, i);
     this.pose();
     if (g.timers.length) {
@@ -429,7 +443,7 @@ export class NetClient {
     const P = (id) => g.byId(id);
     switch (e[1]) {
       case 'fx':
-        if (typeof g.effects[e[2]] === 'function' && Array.isArray(e[3])) g.effects[e[2]](...e[3].map(vec));
+        if (FX.has(e[2]) && typeof g.effects[e[2]] === 'function' && Array.isArray(e[3])) g.effects[e[2]](...e[3].map(vec));
         break;
       case 'ps': {
         const p = P(e[2]);
@@ -558,7 +572,9 @@ export class NetClient {
   // the host's list of players: new ones come, gone ones go, teams change
   roster(list) {
     const g = this.g, ids = new Set();
+    if (!Array.isArray(list)) return;
     for (const e of list) {
+      if (!Array.isArray(e) || !Number.isInteger(e[0])) continue;
       ids.add(e[0]);
       const p = g.byId(e[0]);
       if (!p) {
@@ -570,9 +586,9 @@ export class NetClient {
       p.isBot = !!e[4];
       p.pid = e[5];
       p.spectator = !!e[7];
-      const color = e[6] || null;
-      if (e[3] !== p.look || color !== (p.char ? p.char.color : null)) {
-        p.char = color ? { color } : null;
+      const mark = color(e[6]);
+      if (e[3] !== p.look || mark !== (p.char ? p.char.color : null)) {
+        p.char = mark ? { color: mark } : null;
         g.makeModel(p, e[3] || 'T');
       }
     }
@@ -587,15 +603,15 @@ export class NetClient {
 
   setState(st) {
     const g = this.g, r = g.round;
-    r.n = st.n;
+    r.n = num(st.n);
     r.state = st.st;
-    r.until = st.until;
-    r.endsAt = st.ends;
-    g.teamScore = { T: st.score[0], CT: st.score[1] };
-    g.matchEndsAt = st.end || Infinity;
+    r.until = num(st.until);
+    r.endsAt = num(st.ends);
+    g.teamScore = { T: num(st.score?.[0]), CT: num(st.score?.[1]) };
+    g.matchEndsAt = num(st.end) || Infinity;
     if (g.bm) {
-      g.bm.roundStartTime = st.buy;
-      g.bm.planted = st.planted;
+      g.bm.roundStartTime = num(st.buy);
+      g.bm.planted = !!st.planted;
     }
   }
 
@@ -603,8 +619,11 @@ export class NetClient {
     for (const [id, kills, deaths, score, hackKills, ping, ggLevel, ggKills, money] of list) {
       const p = this.g.byId(id);
       if (!p) continue;
-      Object.assign(p, { kills, deaths, score, hackKills, ping, ggLevel, ggKills });
-      if (p !== this.g.human) p.money = money;
+      Object.assign(p, {
+        kills: num(kills), deaths: num(deaths), score: num(score), hackKills: num(hackKills), ping: num(ping),
+        ggLevel: Math.max(0, Math.min(KNIFE_LEVEL, Math.floor(num(ggLevel)))), ggKills: num(ggKills),
+      });
+      if (p !== this.g.human) p.money = num(money);
     }
   }
 
